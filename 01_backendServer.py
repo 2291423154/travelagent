@@ -7,6 +7,9 @@ import time
 # Windows 平台必须在任何异步操作之前设置事件循环策略
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    # 抑制 psycopg 连接池在 Windows 上的异步事件循环警告（不影响功能）
+    import warnings
+    warnings.filterwarnings("ignore", category=RuntimeWarning, module="psycopg")
 from fastapi import FastAPI, HTTPException
 from typing import Dict
 import uuid

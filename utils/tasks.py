@@ -1,4 +1,10 @@
+import sys
 import asyncio
+
+# Windows 平台事件循环策略修复（Celery Worker 也需要）
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from fastapi import HTTPException
 import logging
 from concurrent_log_handler import ConcurrentRotatingFileHandler
