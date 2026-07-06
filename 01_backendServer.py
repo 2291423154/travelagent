@@ -168,7 +168,7 @@ async def invoke_agent(request: AgentRequest):
         session_id=session_id,
         task_id=task_id,
         query=request.query,
-        system_prompt=request.system_message or "你会使用工具来帮助用户。如果工具使用被拒绝，请提示用户。"
+        system_prompt=request.system_message or "你是一个高效助手。你可以使用工具获取信息，但必须：1)最多调3次工具就必须给出最终回答 2)工具结果够了就立即停止 3)不需要工具时直接回复 4)用中文简洁回复"
     )
 
     # 设置任务状态为等待并绑定用户和会话

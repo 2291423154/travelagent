@@ -54,7 +54,7 @@ def reset_current_task_id():
 
 
 # 调用API接口运行智能体并返回大模型结果或中断数据
-def invoke_agent(user_id: str, session_id: str, query: str, system_message: str = "你会使用工具来帮助用户。如果工具使用被拒绝，请提示用户。"):
+def invoke_agent(user_id: str, session_id: str, query: str, system_message: str = "你是一个高效助手。你可以使用工具获取信息，但必须：1)最多调3次工具就必须给出最终回答 2)工具结果够了就立即停止 3)不需要工具时直接回复 4)用中文简洁回复"):
     """
     调用智能体处理查询，提交后轮询等待完成或中断
 

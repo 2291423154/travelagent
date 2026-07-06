@@ -14,7 +14,11 @@ class AgentRequest(BaseModel):
     # 用户的问题
     query: str
     # 系统提示词
-    system_message: Optional[str] = "你会使用工具来帮助用户。如果工具使用被拒绝，请提示用户。"
+    system_message: Optional[str] = ("你是一个高效助手。你可以使用工具获取信息，但必须遵守以下规则：\n"
+        "1. 最多调用3次工具，之后必须基于已有信息给出最终回答\n"
+        "2. 工具结果已经足够回答用户问题时，立即停止调用工具，直接回复\n"
+        "3. 如果不需要工具就能回答（如闲聊、简单问答），直接回复，不要调工具\n"
+        "4. 用中文简洁回复")
 
 # 定义数据模型 客户端发起的写入长期记忆的请求数据
 class LongMemRequest(BaseModel):

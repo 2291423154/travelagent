@@ -396,12 +396,12 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                     {"role": "user", "content": query}
                 ]
 
-                # 调用智能体（recursion_limit 防止无限循环）
+                # 调用智能体（recursion_limit 防止无限循环，每轮 resume 累积计数由 Redis 控制）
                 result = await agent.ainvoke(
                     {"messages": messages},
                     config={
                         "configurable": {"thread_id": task_id},
-                        "recursion_limit": 10,  # 最多 10 轮推理
+                        "recursion_limit": 5,
                     }
                 )
 
