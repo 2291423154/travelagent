@@ -12,6 +12,8 @@ import json
 import time
 from typing import Optional, Callable, Dict, Any
 
+import lark_oapi  # 飞书官方 SDK
+
 # Windows 事件循环修复
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -40,7 +42,6 @@ class FeishuBotClient:
 
     def start(self):
         """启动飞书 WebSocket 连接（阻塞）"""
-        import lark_oapi
         from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
 
         # 创建 API 客户端（用于发消息）
