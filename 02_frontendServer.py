@@ -145,7 +145,7 @@ def invoke_agent(user_id: str, session_id: str, query: str, system_message: str 
 # 调用API接口恢复被中断的智能体运行并等待运行完成或再次中断
 def resume_agent(user_id: str, session_id: str, task_id: str, response_type: str, args: Optional[Dict[str, Any]] = None):
     """
-    发送响应以恢复智能体执行
+    发送响应以恢复智能体执行，提交后轮询等待完成或再次中断
 
     Args:
         user_id: 用户唯一标识
@@ -155,7 +155,7 @@ def resume_agent(user_id: str, session_id: str, task_id: str, response_type: str
         args: 如果是edit, response类型，可能需要额外的参数
 
     Returns:
-        服务端返回的结果
+        服务端返回的 AgentResponse 结果
     """
     payload = {
         "user_id": user_id,
@@ -164,18 +164,62 @@ def resume_agent(user_id: str, session_id: str, task_id: str, response_type: str
         "response_type": response_type,
         "args": args
     }
-    
+
     console.print("[info]正在恢复智能体执行，请稍候...[/info]")
-    
+
     with Progress() as progress:
-        task = progress.add_task("[cyan]恢复执行中...", total=None)
+        submit_task = progress.add_task("[cyan]提交恢复请求...", total=None)
         response = requests.post(f"{API_BASE_URL}/agent/resume", json=payload)
-        progress.update(task, completed=100)
-    
-    if response.status_code == 200:
-        return response.json()
-    else:
+        progress.update(submit_task, completed=100)
+
+    if response.status_code != 200:
         raise Exception(f"恢复智能体执行失败: {response.status_code} - {response.text}")
+
+    # 轮询等待结果
+    max_wait = 120
+    poll_interval = 2
+    waited = 0
+    with Progress() as progress:
+        poll_task = progress.add_task("[cyan]等待Agent继续...", total=max_wait)
+        while waited < max_wait:
+            time.sleep(poll_interval)
+            waited += poll_interval
+            progress.update(poll_task, completed=waited)
+
+            try:
+                status_resp = requests.get(
+                    f"{API_BASE_URL}/agent/status/{user_id}/{session_id}/{task_id}",
+                    timeout=10
+                )
+                if status_resp.status_code != 200:
+                    continue
+                status_data = status_resp.json()
+            except Exception:
+                continue
+
+            status = status_data.get("status", "")
+
+            if status == "completed":
+                progress.update(poll_task, completed=max_wait)
+                last_resp = status_data.get("last_response")
+                if isinstance(last_resp, dict) and "status" in last_resp:
+                    return last_resp
+                return {"session_id": session_id, "task_id": task_id, "status": "completed", "result": status_data}
+
+            if status == "interrupted":
+                progress.update(poll_task, completed=max_wait)
+                last_resp = status_data.get("last_response")
+                if isinstance(last_resp, dict) and "status" in last_resp:
+                    return last_resp
+                return {"session_id": session_id, "task_id": task_id, "status": "interrupted", "interrupt_data": {}}
+
+            if status == "running":
+                # 继续等待
+                continue
+
+        progress.update(poll_task, completed=max_wait)
+
+    raise Exception(f"Agent响应超时({max_wait}秒)")
 
 # 调用API接口写入指定用户长期记忆内容
 def write_long_term(user_id: str, memory_info: str):
