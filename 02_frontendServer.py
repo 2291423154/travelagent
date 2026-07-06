@@ -56,7 +56,7 @@ def reset_current_task_id():
 # 调用API接口运行智能体并返回大模型结果或中断数据
 def invoke_agent(user_id: str, session_id: str, query: str, system_message: str = "你会使用工具来帮助用户。如果工具使用被拒绝，请提示用户。"):
     """
-    调用智能体处理查询，并等待完成或中断
+    调用智能体处理查询，提交后轮询等待完成或中断
 
     Args:
         user_id: 用户唯一标识
@@ -65,7 +65,7 @@ def invoke_agent(user_id: str, session_id: str, query: str, system_message: str 
         system_message: 系统提示词
 
     Returns:
-        服务端返回的结果
+        服务端返回的 AgentResponse（含 status / result / interrupt_data）
     """
     # 生成 task_id
     task_id = str(uuid.uuid4())
@@ -78,18 +78,69 @@ def invoke_agent(user_id: str, session_id: str, query: str, system_message: str 
         "query": query,
         "system_message": system_message
     }
-    
+
     console.print("[info]正在发送请求到智能体，请稍候...[/info]")
-    
+
     with Progress() as progress:
-        task = progress.add_task("[cyan]处理中...", total=None)
+        submit_task = progress.add_task("[cyan]提交任务中...", total=None)
         response = requests.post(f"{API_BASE_URL}/agent/invoke", json=payload)
-        progress.update(task, completed=100)
-    
-    if response.status_code == 200:
-        return response.json()
-    else:
+        progress.update(submit_task, completed=100)
+
+    if response.status_code != 200:
         raise Exception(f"API调用失败: {response.status_code} - {response.text}")
+
+    submit_result = response.json()
+    task_id = submit_result.get("task_id", task_id)
+    set_current_task_id(task_id)
+
+    # 轮询等待 Agent 完成或中断（最多120秒）
+    max_wait = 120
+    poll_interval = 2
+    waited = 0
+    with Progress() as progress:
+        poll_task = progress.add_task("[cyan]等待Agent响应...", total=max_wait)
+        while waited < max_wait:
+            time.sleep(poll_interval)
+            waited += poll_interval
+            progress.update(poll_task, completed=waited)
+
+            try:
+                status_resp = requests.get(
+                    f"{API_BASE_URL}/agent/status/{user_id}/{session_id}/{task_id}",
+                    timeout=10
+                )
+                if status_resp.status_code != 200:
+                    continue
+                status_data = status_resp.json()
+            except Exception:
+                continue
+
+            status = status_data.get("status", "")
+
+            if status == "completed":
+                progress.update(poll_task, completed=max_wait)
+                last_resp = status_data.get("last_response")
+                if isinstance(last_resp, dict) and "status" in last_resp:
+                    return last_resp
+                return {"session_id": session_id, "task_id": task_id, "status": "completed", "result": status_data}
+
+            if status == "interrupted":
+                progress.update(poll_task, completed=max_wait)
+                last_resp = status_data.get("last_response")
+                if isinstance(last_resp, dict) and "status" in last_resp:
+                    return last_resp
+                return {"session_id": session_id, "task_id": task_id, "status": "interrupted", "interrupt_data": {}}
+
+            if status == "error":
+                progress.update(poll_task, completed=max_wait)
+                last_resp = status_data.get("last_response")
+                if isinstance(last_resp, dict) and "status" in last_resp:
+                    return last_resp
+                return {"session_id": session_id, "task_id": task_id, "status": "error", "message": "Agent处理出错"}
+
+        progress.update(poll_task, completed=max_wait)
+
+    raise Exception(f"Agent响应超时({max_wait}秒)，请检查Celery Worker是否在运行")
 
 # 调用API接口恢复被中断的智能体运行并等待运行完成或再次中断
 def resume_agent(user_id: str, session_id: str, task_id: str, response_type: str, args: Optional[Dict[str, Any]] = None):
