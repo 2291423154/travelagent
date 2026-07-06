@@ -396,10 +396,13 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                     {"role": "user", "content": query}
                 ]
 
-                # 调用智能体
+                # 调用智能体（recursion_limit 防止无限循环）
                 result = await agent.ainvoke(
                     {"messages": messages},
-                    config={"configurable": {"thread_id": task_id}}
+                    config={
+                        "configurable": {"thread_id": task_id},
+                        "recursion_limit": 10,  # 最多 10 轮推理
+                    }
                 )
 
                 # 解析返回的消息
@@ -504,10 +507,13 @@ def resume_agent_task(user_id: str, session_id: str, task_id: str, command_data:
                     store=store
                 )
 
-                # 调用智能体
+                # 调用智能体（recursion_limit 防止无限循环）
                 result = await agent.ainvoke(
                     Command(resume=command_data),
-                    config={"configurable": {"thread_id": task_id}}
+                    config={
+                        "configurable": {"thread_id": task_id},
+                        "recursion_limit": 10,
+                    }
                 )
 
                 # 解析返回的消息

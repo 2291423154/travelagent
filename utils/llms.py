@@ -33,7 +33,7 @@ MODEL_CONFIGS = {
     "openai": {
         "base_url": os.getenv("OPENAI_BASE_URL", "https://api.llm.ustc.edu.cn/v1"),
         "api_key": os.getenv("OPENAI_API_KEY"),
-        "chat_model": os.getenv("OPENAI_CHAT_MODEL", "qwen-chat"),
+        "chat_model": os.getenv("OPENAI_CHAT_MODEL", "deepseek-v4-pro"),
         "embedding_model": os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-v1")
     },
     "oneapi": {
