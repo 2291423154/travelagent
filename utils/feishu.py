@@ -54,8 +54,7 @@ class FeishuBotClient:
         # WebSocket 模式不需要 encrypt_key 和 verification_token，传空字符串
         handler = EventDispatcherHandler.builder(
             "", ""
-        ).register(
-            lark_oapi.event.dispatcher_handler.P2ImMessageReceiveV1,
+        ).register_p2_im_message_receive_v1(
             self._on_message_receive
         ).build()
 
@@ -79,33 +78,43 @@ class FeishuBotClient:
 
     # ---------- 消息接收 ----------
 
-    def _on_message_receive(self, data: dict):
-        """处理 im.message.receive_v1 事件"""
+    def _on_message_receive(self, data):
+        """处理 im.message.receive_v1 事件（SDK 传入 P2ImMessageReceiveV1 对象）"""
         try:
-            event = data.get("event", {})
-            message = event.get("message", {})
+            # SDK 传的是 Pydantic 对象，兼容 dict 和属性访问
+            def _get(obj, attr, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(attr, default)
+                return getattr(obj, attr, default)
 
-            chat_id = message.get("chat_id", "")
-            msg_type = message.get("message_type", "")
-            msg_id = message.get("message_id", "")
-            content_raw = message.get("content", "{}")
-            chat_type = event.get("message", {}).get("chat_type", "p2p")
+            event = _get(data, "event", data)
+            message = _get(event, "message", event)
 
-            # 获取发送者
-            sender = event.get("sender", {})
-            sender_id = sender.get("sender_id", {})
-            open_id = sender_id.get("open_id", sender_id.get("user_id", "unknown"))
+            chat_id = _get(message, "chat_id", "")
+            msg_type = _get(message, "message_type", "") or _get(message, "msg_type", "")
+            msg_id = _get(message, "message_id", "")
+            content_raw = _get(message, "content", "{}")
+            chat_type = _get(message, "chat_type", "p2p")
+
+            # 获取发送者 open_id
+            sender = _get(event, "sender", {})
+            sender_id = _get(sender, "sender_id", {})
+            open_id = _get(sender_id, "open_id", "") or _get(sender_id, "user_id", "unknown")
 
             # 解析消息文本
             text = self._parse_content(msg_type, content_raw)
 
             logger.info(
                 f"[飞书] 收到消息: open_id={open_id}, chat_id={chat_id}, "
-                f"type={msg_type}, chat_type={chat_type}, text={text[:100]}"
+                f"type={msg_type}, chat_type={chat_type}, text={text[:100] if text else '(empty)'}"
             )
 
-            # 构建统一的消息结构，回调给上层
-            if self.message_handler:
+            # 跳过机器人自己的消息（open_id 为空或等于 bot）
+            if not open_id or open_id == "unknown":
+                return
+
+            # 回调给上层
+            if self.message_handler and text:
                 self.message_handler({
                     "open_id": open_id,
                     "chat_id": chat_id,
@@ -113,7 +122,6 @@ class FeishuBotClient:
                     "msg_type": msg_type,
                     "chat_type": chat_type,
                     "text": text,
-                    "raw_event": event,
                 })
 
         except Exception as e:
