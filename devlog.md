@@ -42,6 +42,17 @@
 ### 代码修复
 - `01_backendServer.py:6-7`：Windows 事件循环策略移到文件顶部，避免 ProactorEventLoop 错误
 
+## 2026-07-06 — LLM 切换：阿里千问 → 科大 API ✅
+
+### 变更内容
+- **LLM 后端**：从阿里 DashScope 切换到科大 API（`api.llm.ustc.edu.cn`）
+- **模型**：`qwen-chat`（支持 Function Calling）
+- **配置修改**：
+  - `utils/config.py:29`：`LLM_TYPE = "openai"`
+  - `utils/llms.py:33-38`：openai 配置改为科大 API 的 base_url 和 chat_model
+- **SSL 修复**：conda 环境的 `SSL_CERT_FILE` 缺失，从 miniconda3 复制 cacert.pem
+- **验证结果**：LLM 连接成功、17 个工具全部加载（15 个高德地图 + book_hotel + multiply）
+
 ### API 验证
 - `GET /system/info` → `200 OK`，`{"sessions_count":0,"active_users":{}}`
 - 下一步：启动 Celery Worker 进行完整 Agent 功能测试

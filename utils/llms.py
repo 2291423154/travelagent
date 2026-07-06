@@ -31,10 +31,10 @@ logger.addHandler(handler)
 # 模型配置字典
 MODEL_CONFIGS = {
     "openai": {
-        "base_url": os.getenv("OPENAI_BASE_URL"),
+        "base_url": os.getenv("OPENAI_BASE_URL", "https://api.llm.ustc.edu.cn/v1"),
         "api_key": os.getenv("OPENAI_API_KEY"),
-        "chat_model": "gpt-4o-mini",
-        "embedding_model": "text-embedding-3-small"
+        "chat_model": os.getenv("OPENAI_CHAT_MODEL", "qwen-chat"),
+        "embedding_model": os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-v1")
     },
     "oneapi": {
         "base_url": "http://139.224.72.218:3000/v1",
