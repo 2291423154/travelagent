@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+*.whl
+
+# Virtual environments
+venv/
+env/
+.venv/
+.conda/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-*
+
+# Logs
+logfile/*.log*
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+*.bak
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Docker volumes
+docker/**/data/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# PDF docs (binary)
+docs/*.pdf
