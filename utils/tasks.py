@@ -400,7 +400,7 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                 result = await agent.ainvoke(
                     {"messages": messages},
                     config={
-                        "configurable": {"thread_id": task_id},
+                        "configurable": {"thread_id": session_id},
                         "recursion_limit": 5,
                     }
                 )
@@ -511,8 +511,8 @@ def resume_agent_task(user_id: str, session_id: str, task_id: str, command_data:
                 result = await agent.ainvoke(
                     Command(resume=command_data),
                     config={
-                        "configurable": {"thread_id": task_id},
-                        "recursion_limit": 10,
+                        "configurable": {"thread_id": session_id},
+                        "recursion_limit": 5,
                     }
                 )
 
