@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-07-06 — 环境搭建与后端服务验证通过 ✅
+
+### Conda 环境
+- 环境名：`ReActAgents`，Python 3.11，位置 `D:\envs\ReActAgents`
+- 激活：`source /c/Users/lenovo/miniconda3/etc/profile.d/conda.sh && conda activate ReActAgents`
+
+### 依赖安装（版本冻结）
+| 包 | 版本 | 说明 |
+|---|---|---|
+| langgraph | 0.4.5 | ReAct Agent 框架 |
+| langchain | 0.3.25 | LLM 编排框架 |
+| langchain-core | 0.3.86 | 核心类型（锁定版本） |
+| langchain-openai | 0.3.17 | OpenAI 兼容接口 |
+| langgraph-checkpoint-postgres | 2.0.21 | PostgreSQL checkpointer |
+| langgraph-prebuilt | 0.1.8 | 预置 Agent（兼容 langgraph 0.4.5） |
+| langchain-mcp-adapters | 0.1.14 | MCP 客户端适配（锁定版本） |
+| fastapi | 0.139.0 | **升级**以兼容 starlette 1.3.1 |
+| starlette | 1.3.1 | 由 MCP 依赖升级 |
+| psycopg | 3.3.4 + psycopg-binary 3.3.4 | 异步 PostgreSQL |
+| celery | 5.5.3 | 异步任务队列 |
+| redis | 6.2.0 | Redis 客户端 |
+
+### 版本冲突解决记录
+1. `langgraph-prebuilt 1.0.1` 与 `langgraph 0.4.5` 不兼容 → 降级到 `0.1.8`
+2. 缺少 `langchain-mcp-adapters` → 安装 `0.1.14`（兼容 langchain-core 0.3.x）
+3. `langchain-mcp-adapters 0.3.0` 要求 `langchain-core>=1.0.0` → 回退到 `0.1.14`
+4. `starlette 1.3.1` 与 `fastapi 0.115.12` 不兼容 → 升级 FastAPI 到 `0.139.0`
+5. 缺少 `psycopg-binary` 扩展 → 安装 `3.3.4`
+
+### 基础设施
+- PostgreSQL 15：Docker 启动，`localhost:5432`，用户 `kevin`，密码 `123456`
+- Redis：Docker 启动，`localhost:6379`
+- LLM：阿里通义千问（`DASHSCOPE_API_KEY` 已配置）
+
+### 代码修复
+- `01_backendServer.py:6-7`：Windows 事件循环策略移到文件顶部，避免 ProactorEventLoop 错误
+
+### API 验证
+- `GET /system/info` → `200 OK`，`{"sessions_count":0,"active_users":{}}`
+- 下一步：启动 Celery Worker 进行完整 Agent 功能测试
+
+---
+
 ## 2026-07-06 — 项目初始化与 Git 仓库建立
 
 ### 变更内容

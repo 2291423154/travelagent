@@ -3,6 +3,10 @@ import asyncio
 import logging
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 import time
+
+# Windows 平台必须在任何异步操作之前设置事件循环策略
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from fastapi import FastAPI, HTTPException
 from typing import Dict
 import uuid
@@ -421,7 +425,4 @@ async def delete_agent_task(user_id: str, session_id: str, task_id: str):
 
 # 启动服务器
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
     uvicorn.run(app, host=Config.HOST, port=Config.PORT)
