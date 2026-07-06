@@ -51,12 +51,13 @@ class FeishuBotClient:
             .build()
 
         # 创建事件分发器，注册 IM 消息事件
-        handler = EventDispatcherHandler.builder() \
-            .register(
-                lark_oapi.event.dispatcher_handler.P2ImMessageReceiveV1,
-                self._on_message_receive
-            ) \
-            .build()
+        # WebSocket 模式不需要 encrypt_key 和 verification_token，传空字符串
+        handler = EventDispatcherHandler.builder(
+            "", ""
+        ).register(
+            lark_oapi.event.dispatcher_handler.P2ImMessageReceiveV1,
+            self._on_message_receive
+        ).build()
 
         # 创建 WS 客户端
         self.ws_client = lark_oapi.ws.Client(
