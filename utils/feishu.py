@@ -177,13 +177,14 @@ class FeishuBotClient:
     def send_text(self, chat_id: str, text: str) -> Optional[str]:
         """发送纯文本消息到指定 chat"""
         try:
-            req = lark_oapi.im.v1.model.CreateMessageReq.builder() \
+            body = lark_oapi.api.im.v1.model.CreateMessageRequestBody.builder() \
+                .receive_id(chat_id) \
+                .msg_type("text") \
+                .content(json.dumps({"text": text})) \
+                .build()
+            req = lark_oapi.api.im.v1.model.CreateMessageRequest.builder() \
                 .receive_id_type("chat_id") \
-                .body(lark_oapi.im.v1.model.CreateMessageReqBody.builder()
-                      .receive_id(chat_id)
-                      .msg_type("text")
-                      .content(json.dumps({"text": text}))
-                      .build()) \
+                .request_body(body) \
                 .build()
             resp = self.api_client.im.v1.message.create(req)
             if resp.success():
@@ -200,12 +201,13 @@ class FeishuBotClient:
     def reply_text(self, msg_id: str, text: str) -> Optional[str]:
         """回复指定消息"""
         try:
-            req = lark_oapi.im.v1.model.ReplyMessageReq.builder() \
+            body = lark_oapi.api.im.v1.model.ReplyMessageRequestBody.builder() \
+                .msg_type("text") \
+                .content(json.dumps({"text": text})) \
+                .build()
+            req = lark_oapi.api.im.v1.model.ReplyMessageRequest.builder() \
                 .message_id(msg_id) \
-                .body(lark_oapi.im.v1.model.ReplyMessageReqBody.builder()
-                      .msg_type("text")
-                      .content(json.dumps({"text": text}))
-                      .build()) \
+                .request_body(body) \
                 .build()
             resp = self.api_client.im.v1.message.reply(req)
             if resp.success():
@@ -221,13 +223,14 @@ class FeishuBotClient:
         """发送富文本消息（post 格式）"""
         try:
             post_content = self._build_post(title, lines)
-            req = lark_oapi.im.v1.model.CreateMessageReq.builder() \
+            body = lark_oapi.api.im.v1.model.CreateMessageRequestBody.builder() \
+                .receive_id(chat_id) \
+                .msg_type("post") \
+                .content(post_content) \
+                .build()
+            req = lark_oapi.api.im.v1.model.CreateMessageRequest.builder() \
                 .receive_id_type("chat_id") \
-                .body(lark_oapi.im.v1.model.CreateMessageReqBody.builder()
-                      .receive_id(chat_id)
-                      .msg_type("post")
-                      .content(post_content)
-                      .build()) \
+                .request_body(body) \
                 .build()
             resp = self.api_client.im.v1.message.create(req)
             if resp.success():
