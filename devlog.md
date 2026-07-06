@@ -5,6 +5,37 @@
 
 ---
 
+## 2026-07-06 — 飞书机器人集成 ✅
+
+### 新增文件
+| 文件 | 行数 | 说明 |
+|---|---|---|
+| `utils/feishu.py` | ~200 | 飞书 SDK 封装（WSClient + 消息收发 + 重连） |
+| `03_feishuBot.py` | ~220 | 飞书 Bot 主进程（消息→Agent→回复） |
+
+### 修改文件
+| 文件 | 变更 |
+|---|---|
+| `utils/config.py` | 新增 `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_AUTO_ACCEPT_TOOLS` |
+| `02_frontendServer.py` | 从 05 项目复制，适配 task_id 参数，新增 task_id 全局追踪 |
+
+### 技术选型
+- SDK: `lark-oapi`（飞书官方 Python SDK）
+- 连接: WebSocket（无需公网 URL）
+- 事件: `im.message.receive_v1`
+- 消息: `im.v1.message.create/reply`
+- HITL: 默认自动批准工具调用，可配置为手动模式
+
+### 启动方式
+```bash
+$env:FEISHU_APP_ID="cli_xxx"
+$env:FEISHU_APP_SECRET="xxx"
+python 03_feishuBot.py          # 飞书 Bot
+python 02_frontendServer.py     # Rich CLI 前端
+```
+
+---
+
 ## 2026-07-06 — 环境搭建与后端服务验证通过 ✅
 
 ### Conda 环境

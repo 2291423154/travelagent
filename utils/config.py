@@ -28,6 +28,12 @@ class Config:
     # openai:调用gpt模型,qwen:调用阿里通义千问大模型,oneapi:调用oneapi方案支持的模型,ollama:调用本地开源大模型
     LLM_TYPE = "openai"
 
+    # 飞书机器人配置
+    FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
+    FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
+    # 飞书 Bot 模式: 是否自动批准工具调用（生产环境建议设为 True）
+    FEISHU_AUTO_ACCEPT_TOOLS = os.getenv("FEISHU_AUTO_ACCEPT_TOOLS", "true").lower() == "true"
+
     # API服务地址和端口
     HOST = "0.0.0.0"
     PORT = 8001
