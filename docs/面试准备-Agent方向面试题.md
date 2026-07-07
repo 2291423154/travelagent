@@ -14,6 +14,7 @@
 - [五、面试高频问题（36题）](#五面试高频问题36题)
 - [六、支付与真实工具集成架构](#六支付与真实工具集成架构)
 - [七、自测清单](#七自测清单)
+- [八、项目中遇到的真实问题与解决](#八项目中遇到的真实问题与解决)
 
 ---
 
@@ -887,6 +888,167 @@ HITL 审批 → 是否允许调用 book_hotel？
 - [ ] 如何接真实支付
 - [ ] 当前项目最大的 3 个缺陷
 - [ ] Python 3.11 vs 3.12 性能差异
+
+---
+
+## 八、项目中遇到的真实问题与解决
+
+### 问题1：前端报错 "响应格式错误，缺少关键字段 'status'"
+
+**现象：** Rich CLI 前端调用 `/agent/invoke` 后，返回的数据没有 `status` 字段，`process_agent_response()` 直接报错。
+
+**原因：** `/agent/invoke` 是异步接口，后端收到请求后立即返回 `{user_id, session_id, task_id}`（任务提交确认），真正的执行状态在 Celery Worker 里。前端代码直接从 05 项目复制过来，05 项目是同步接口（等 Agent 跑完才返回），但 06 项目改成异步了，返回数据结构完全不一样。
+
+**解决：** 重写 `invoke_agent()` 函数——提交任务后轮询 `GET /agent/status/...` 等待 Agent 完成或中断，拿到真正带 `status` 的 `AgentResponse` 后再返回给上层。
+
+**教训：** 后端接口改异步后，前端调用逻辑必须跟着变——提交→轮询→结果，不能假设一步到位。
+
+---
+
+### 问题2：Agent 不停调用工具停不下来
+
+**现象：** LLM 一直在调工具（查天气→查地理→查酒店→查路线→...），从不给出最终回答。
+
+**原因：** 两个因素叠加：
+1. **模型问题：** `qwen-chat` 的工具调用判断能力弱，拿到工具结果后继续调下一个，不知道"该停了"
+2. **提示词太弱：** 默认 system prompt 只有"你会使用工具来帮助用户"，没有约束调用次数
+
+**解决：**
+- 换模型：`qwen-chat` → `deepseek-v4-pro`（工具调用判断更准）
+- 加约束：system prompt 改为"最多调3次工具就必须给出最终回答，工具结果够了立即停止"
+- 加硬限制：`recursion_limit=5` 兜底
+
+**教训：** 模型的选择直接影响 Agent 行为质量。qwen-chat 便宜但工具判断差，deepseek-v4-pro/claude 贵但更可靠。生产环境要有模型降级策略。
+
+---
+
+### 问题3：每次新问题 Agent 都不记得之前对话
+
+**现象：** 先问"我是 jinjin"，再问"我叫什么名字"，Agent 回答"我不知道你是谁"。
+
+**原因：** LangGraph 的 `thread_id` 用了 `task_id`，导致每个新问题（新 task_id）是一个全新对话，短期记忆不共享。
+
+**解决：** `thread_id` 从 `task_id` 改成 `session_id`——同一会话内所有任务共享同一个 thread，短期记忆（PG Checkpointer）可以跨任务访问。
+
+**教训：** thread_id 是 LangGraph 状态的隔离单位。用错了粒度会导致对话丢失，这是 Agent 系统里特别容易踩的坑。
+
+---
+
+### 问题4：飞书 Bot WebSocket 连接问题
+
+**现象：** 启动飞书 Bot 时遇到多个 SDK API 兼容问题。
+
+**子问题与解决：**
+
+| 序号 | 报错 | 原因 | 解决 |
+|---|---|---|---|
+| 1 | `EventDispatcherHandler.builder() missing 2 required positional arguments` | WS 模式不需要 encrypt_key 和 verification_token，但 SDK 4.x 强制要求 | 传空字符串 `builder("","")` |
+| 2 | `EventDispatcherHandlerBuilder' object has no attribute 'register'` | API 不是 `register()`，而是按事件类型的具体方法 | `register_p2_im_message_receive_v1()` |
+| 3 | `module has no attribute 'CreateMessageReq'` | SDK 4.x 用蛇形命名 | `create_message_request_body`, `create_message_request` |
+| 4 | `Builder has no attribute 'create_message_request_body'` | builder 方法名是 `request_body` | `request_body(body)` |
+| 5 | `name 'lark_oapi' is not defined` | send_text 方法里用到 lark_oapi，但只在 start() 里局部 import | 提到文件顶部全局 import |
+
+**教训：** `lark-oapi` Python SDK 的 API 命名风格跟 Node.js 版完全不同，也不能完全信文档。最可靠的方法是用 `dir()` 和 `inspect.signature()` 直接探查实际的类方法。
+
+---
+
+### 问题5：Windows 上 psycopg 异步事件循环兼容
+
+**现象：** 后端启动时大量报错 `Psycopg cannot use the 'ProactorEventLoop'`。
+
+**原因：** Python 在 Windows 上默认用 `ProactorEventLoop`，psycopg 需要 `SelectorEventLoopPolicy`。
+
+**解决：**
+```python
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+```
+放在文件顶部（在 `import` 之后、`uvicorn.run` 之前）。同时 Celery Worker 也要加同样的策略。
+
+**教训：** Windows 开发环境的问题到 Linux 生产环境会自动消失。但要学会用 `warnings.filterwarnings` 抑制无害但干扰的日志。
+
+---
+
+### 问题6：pip 版本冲突链式崩溃
+
+**现象：** 安装 `langchain-mcp-adapters` 后，`langchain-core` 被自动升级到 1.4.8，导致 `langchain==0.3.25`、`fastapi==0.115.12` 全都不兼容。
+
+**依赖链冲突：**
+```
+langchain-mcp-adapters 0.3.0 → langchain-core>=1.0.0
+  → 与 langchain 0.3.25 冲突（需要 langchain-core<1.0.0）
+  → 与 langgraph-prebuilt 0.1.8 冲突
+  → starlette 1.3.1 与 fastapi 0.115.12 冲突
+```
+
+**解决：** 锁定兼容版本：
+- `langchain-mcp-adapters==0.1.14`（兼容 langchain-core 0.3.x）
+- `fastapi>=0.116.0`（兼容 starlette 1.x）
+- `langgraph-prebuilt==0.1.8`（兼容 langgraph 0.4.5）
+
+**教训：** Python 依赖管理不能全信任 `pip install` 解决依赖。固定版本号、安装后检查冲突、用 `requirements.txt` 锁定全部依赖。
+
+---
+
+### 问题7：飞书 Bot 收到了消息但回复发送失败
+
+**现象：** Bot 日志显示 `收到消息: text=hello` 和 `Agent 状态: completed`，但 `send_text` 报错。
+
+**原因：** `send_text` 里用的 `lark_oapi.im.v1.model.CreateMessageReq` 是驼峰命名法，SDK 4.x 实际用的是蛇形命名 `create_message_request`。builder API 也不是链式调用 `.create_message_request_body()` 而是 `.request_body()`。
+
+**解决：** 用 Python `inspect` 模块直接探查 SDK 真实 API：
+```python
+from lark_oapi.api.im.v1.model import CreateMessageRequest
+b = CreateMessageRequest.builder()
+print([x for x in dir(b)])  # → ['build', 'receive_id_type', 'request_body']
+```
+
+**教训：** 遇到 SDK 兼容问题时，直接 inspect 比翻文档快。SDK 小版本升级可能 break API。
+
+---
+
+### 问题8：PowerShell 中文编码问题
+
+**现象：** 用 `curl.exe` 或 `Invoke-WebRequest` 发中文给 API，Agent 收到乱码。
+
+**原因：** Windows PowerShell 默认编码是 GBK，而 FastAPI / LLM 用 UTF-8。中文 JSON 在 PowerShell 管道里被转码。
+
+**解决：** 
+- 用 `curl.exe`（Windows 原生）代替 PowerShell 的 `curl` 别名
+- 或者设置 PowerShell 编码：`$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8`
+- Web UI 没有这个问题（浏览器自动 UTF-8）
+
+**教训：** PowerShell 的中文编码是 Windows 开发的常见坑。能用 Web UI 测就别用命令行。
+
+---
+
+### 问题9：SSL 证书找不到导致 LLM 初始化失败
+
+**现象：** 用 conda 环境时，LLM 初始化报 `FileNotFoundError: [Errno 2] No such file or directory`，指向 SSL 证书路径。
+
+**原因：** conda 环境变量 `SSL_CERT_FILE` 指向 `D:\envs\ReActAgents/ssl/cacert.pem`，但该文件不存在（conda 创建环境时没有复制证书）。
+
+**解决：** 直接从 miniconda3 复制证书：
+```powershell
+cp "C:\Users\lenovo\miniconda3\Library\ssl\cacert.pem" "D:\envs\ReActAgents\ssl\cacert.pem"
+```
+
+**教训：** conda 环境在某些 Windows 安装中 SSL 证书路径不完整。遇到 SSL 相关错误先检查 `$env:SSL_CERT_FILE`。
+
+---
+
+### 问题10：Celery Worker 在 Windows 上启动失败
+
+**现象：** 直接运行 `celery -A app worker` 报 `ValueError: not enough values to unpack` 或 `OSError: [WinError 87] 参数错误`。
+
+**原因：** Celery 在 Windows 上默认 `pool=prefork` 不兼容。`prefork` 模式需要通过 `fork()` 创建子进程，但 Windows 没有 `fork()`。
+
+**解决：** 加 `--pool=solo`：
+```powershell
+celery -A 01_backendServer.celery_app worker --loglevel=info --pool=solo
+```
+
+**教训：** Celery 在 Windows 上只能用于开发测试，生产环境必须部署到 Linux 使用 `prefork` 或 `gevent` 池。
 
 ---
 
