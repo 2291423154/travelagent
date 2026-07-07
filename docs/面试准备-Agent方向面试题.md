@@ -1,649 +1,894 @@
 # Agent 方向实习面试 — 项目深度问答
 
-> 基于项目：ReActAgentHILApiMultiSessionTask（生产级 Agent 智能体服务）
-> 覆盖范围：Agent 架构 · LLM 原理 · 后端工程 · 数据库 · 分布式 · 安全 · 运维
+> 基于项目：**ReActAgentHILApiMultiSessionTask** — 生产级 Agent 智能体服务
+> 覆盖：Agent 架构 · LLM 原理 · 后端工程 · 数据库 · 分布式 · 安全 · 全栈
 
 ---
 
 ## 目录
 
-1. [Agent 架构与 LangGraph](#1-agent-架构与-langgraph)
-2. [LLM 调用与多模型适配](#2-llm-调用与多模型适配)
-3. [Human-in-the-Loop (HITL)](#3-human-in-the-loop-hitl)
-4. [记忆系统：短期/长期记忆](#4-记忆系统短期长期记忆)
-5. [Function Calling 与工具系统](#5-function-calling-与工具系统)
-6. [MCP (Model Context Protocol)](#6-mcp-model-context-protocol)
-7. [FastAPI 后端架构](#7-fastapi-后端架构)
-8. [Celery 异步任务队列](#8-celery-异步任务队列)
-9. [Redis 会话管理](#9-redis-会话管理)
-10. [PostgreSQL 持久化](#10-postgresql-持久化)
-11. [Docker 与基础设施](#11-docker-与基础设施)
-12. [故障恢复与高可用](#12-故障恢复与高可用)
-13. [系统设计与综合](#13-系统设计与综合)
-14. [安全意识](#14-安全意识)
+- [一、项目全景](#一项目全景)
+- [二、项目结构逐文件解析](#二项目结构逐文件解析)
+- [三、完整数据流](#三完整数据流)
+- [四、四种接入方式](#四四种接入方式)
+- [五、面试高频问题（36题）](#五面试高频问题36题)
+- [六、支付与真实工具集成架构](#六支付与真实工具集成架构)
+- [七、自测清单](#七自测清单)
 
 ---
 
-## 1. Agent 架构与 LangGraph
+## 一、项目全景
 
-### Q1: 什么是 ReAct Agent？它的工作流程是怎样的？
+### 一句话
 
-**答：** ReAct（Reasoning + Acting）是 LangGraph 预置的 Agent 架构，核心流程：
+一个**生产级多用户 Agent 智能体 API 服务**，提供「LLM 推理 + 工具调用 + 人工审查 + 多会话 + 故障恢复」的完整 Agent 能力，支持四种前端接入方式。
+
+### 核心能力矩阵
+
+| 能力 | 实现 | 文件 |
+|---|---|---|
+| LLM 推理引擎 | LangGraph ReAct Agent + LangChain | `utils/tasks.py:368` |
+| 工具调用（Function Calling） | 自定义工具 + MCP Server 工具 | `utils/tools.py` |
+| 人工审查（HITL） | LangGraph `interrupt()` 机制 | `utils/tools.py:76` |
+| 多厂商 LLM 适配 | OpenAI 兼容接口策略模式 | `utils/llms.py:32` |
+| 短期记忆 | PostgreSQL Checkpointer | `utils/tasks.py:359` |
+| 长期记忆 | PostgreSQL Store | `utils/tasks.py:361` |
+| 消息裁剪 | `trim_messages` 策略 | `utils/tasks.py:67` |
+| 会话管理 | Redis 持久化会话状态 | `utils/redis.py` |
+| 异步任务 | Celery + Redis Broker | `utils/tasks.py:44` |
+| 多会话/故障恢复 | Redis 索引 + SessionId | `utils/redis.py:37` |
+| 4 种接入方式 | REST API / Rich CLI / Web UI / 飞书 Bot | 4 个入口文件 |
+
+### 项目架构图
 
 ```
-用户输入 → LLM 推理(思考) → 决定是否调用工具
-    ↓                              ↓
- 工具执行 ← 返回工具结果 ← 是：调用工具
-    ↓
- LLM 综合工具结果 → 最终回答
+┌─────────────────────────────────────────────────────────────────────┐
+│                        外部客户端                                      │
+│  ┌─────────┐  ┌───────────┐  ┌──────────┐  ┌─────────────┐         │
+│  │ curl    │  │ Rich CLI  │  │ Web UI   │  │ 飞书 Bot    │         │
+│  │ Postman │  │ 02_front  │  │ browser  │  │ 03_feishu   │         │
+│  └────┬────┘  └─────┬─────┘  └────┬─────┘  └──────┬──────┘         │
+│       │            │            │             │                    │
+│       └────────────┴────────────┴─────────────┘                    │
+│                        │ HTTP REST API                              │
+│                        ▼                                            │
+├─────────────────────────────────────────────────────────────────────┤
+│                   FastAPI 后端 (01_backendServer.py)                  │
+│  ┌────────────────────┐  ┌──────────────────────────────────────┐   │
+│  │  API 路由层         │  │  生命周期管理                          │   │
+│  │  POST /agent/invoke│  │  AsyncConnectionPool (PG)            │   │
+│  │  POST /agent/resume│  │  AsyncPostgresSaver (短期记忆)        │   │
+│  │  GET  /agent/status│  │  AsyncPostgresStore (长期记忆)        │   │
+│  │  GET  /system/info │  │  RedisSessionManager (会话管理)       │   │
+│  │  GET  /            │  │  Celery 任务提交                      │   │
+│  └────────┬───────────┘  └──────────────────────────────────────┘   │
+│           │                                                         │
+│           │ invoke_agent_task.delay()                               │
+│           ▼                                                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                Celery Worker (utils/tasks.py)                        │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  1. Redis 更新 session 状态 → running                         │   │
+│  │  2. 创建 DB 连接池 → checkpointer + store                     │   │
+│  │  3. 初始化 LLM (get_llm + get_tools)                         │   │
+│  │  4. 读取长期记忆 → 拼接到 system prompt                        │   │
+│  │  5. create_react_agent(model, tools, checkpointer, store)    │   │
+│  │  6. agent.ainvoke(messages, {thread_id: session_id})         │   │
+│  │         ↓ 多轮 ReAct 循环                                      │   │
+│  │  7. process_agent_result → Redis 更新状态                      │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│           │                                                         │
+│           ▼                                                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                        LLM 层                                        │
+│  ┌────────────────────┐  ┌──────────────────────────────────────┐   │
+│  │ ChatOpenAI (接口)  │  │  MODEL_CONFIGS 策略配置                │   │
+│  │  base_url +        │  │  openai / qwen / ollama / oneapi     │   │
+│  │  api_key 切换      │  │                                      │   │
+│  └────────────────────┘  └──────────────────────────────────────┘   │
+│           │                                                         │
+│           ▼                                                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                     工具层                                            │
+│  ┌───────────────────────────┐  ┌──────────────────────────────┐   │
+│  │ 自定义工具 + HITL 包装    │  │ MCP Server 工具               │   │
+│  │  book_hotel (酒店预订)    │  │  高德地图 x17 (天气/路线/    │   │
+│  │  multiply (乘法计算)      │  │  地理编码/搜索/导航)          │   │
+│  │  add_human_in_the_loop()  │  │  MultiServerMCPClient        │   │
+│  └───────────────────────────┘  └──────────────────────────────┘   │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                     数据层                                            │
+│  ┌────────────────────┐  ┌──────────────────┐  ┌──────────────┐    │
+│  │ PostgreSQL 15      │  │ Redis 7           │  │ 日志文件      │    │
+│  │  - Checkpointer    │  │  - 会话状态       │  │ logfile/     │    │
+│  │  - Store           │  │  - 任务状态       │  │ .app.log     │    │
+│  │  - 连接池 5~10     │  │  - Celery Broker  │  │              │    │
+│  └────────────────────┘  └──────────────────┘  └──────────────┘    │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-在我项目中（`utils/tasks.py:368-374`），使用 `langgraph.prebuilt.create_react_agent` 一键创建：
+---
+
+## 二、项目结构逐文件解析
+
+```
+06_ReActAgentHILApiMultiSessionTask/
+│
+├── 01_backendServer.py          ← 后端 API 入口 (~440行)
+│   FastAPI 应用, 11 个 API 端点, 生命周期管理 (PG连接池/Redis)
+│   关键 API:
+│   - POST /agent/invoke      — 异步调用 Agent，返回 task_id
+│   - POST /agent/resume      — 恢复中断 Agent（HITL 响应）
+│   - GET  /agent/status/{u}/{s}/{t} — 查询任务状态
+│   - GET  /system/info       — 系统所有会话概览
+│   - GET  /                  — Web UI 首页
+│   - POST /agent/write/longterm — 写入长期记忆
+│   - DELETE /agent/session/{u}/{s} — 删除会话
+│
+├── 02_frontendServer.py         ← Rich CLI 前端 (~860行)
+│   Rich 终端交互界面
+│   - 用户登录（输入 user_id）
+│   - 自动恢复上次会话
+│   - 对话→提交任务→轮询→显示结果
+│   - HITL 四种决策（yes/no/edit/respons）
+│   - 历史会话管理 / 长期记忆写入
+│   - 故障恢复自动检测
+│
+├── 03_feishuBot.py              ← 飞书 Bot 入口 (~300行)
+│   通过飞书 WebSocket 收发消息
+│   消息→调后端 API→轮询→回复飞书
+│   自动批准工具调用模式（可配置）
+│
+├── static/index.html            ← Web UI 前端 (~270行)
+│   纯 HTML+CSS+JS 单页应用
+│   聊天界面 + HITL 审批按钮
+│   支持 accept/reject/edit/response 四种操作
+│   自动轮询，无需刷新
+│
+├── utils/
+│   ├── config.py                ← 全局配置
+│   │   DB_URI PG连接 / REDIS_HOST  REDIS_PORT /
+│   │   LLM_TYPE 模型选择 / CELERY_BROKER_URL /
+│   │   FEISHU_APP_ID/SECRET
+│   │
+│   ├── llms.py                  ← LLM 统一管理 (~150行)
+│   │   MODEL_CONFIGS = {
+│   │     "openai": { ChatOpenAI(UESTC 科大 API) }
+│   │     "qwen":   { ChatOpenAI(DashScope) }
+│   │     "ollama": { ChatOpenAI(localhost:11434) }
+│   │     "oneapi": { ChatOpenAI(中转网关) }
+│   │   }
+│   │   统一通过 OpenAI 兼容接口调用
+│   │   LLMInitializationError 异常处理
+│   │
+│   ├── tools.py                 ← 工具定义 + HITL (~170行)
+│   │   工具列表:
+│   │   - book_hotel(hotel_name)         模拟酒店预订
+│   │   - multiply(a, b)                 纯计算（无 HITL）
+│   │   - amap_map MCP tools x17        高德地图工具
+│   │   HITL 包装: add_human_in_the_loop()
+│   │   用 interrupt() 暂停流程，等待人类决策
+│   │
+│   ├── tasks.py                 ← Celery 任务 (~560行)
+│   │   celery_app = Celery(broker=redis://)
+│   │   invoke_agent_task()    — 提交 → 创建 Agent → 执行 → 返回
+│   │   resume_agent_task()    — 恢复 → 继续执行 → 返回
+│   │   trimmed_messages_hook()— 消息裁剪 (max_tokens=20)
+│   │   read_long_term_info()  — 读取长期记忆
+│   │   process_agent_result() — 处理完成/中断/错误
+│   │   filter_last_human_conversation() — 提取最近一轮对话
+│   │
+│   ├── redis.py                 ← Redis 会话管理器 (~480行)
+│   │   RedisSessionManager 类
+│   │   数据结构:
+│   │     session:{user_id}:{session_id}:{task_id}  → JSON
+│   │     user_sessions:{user_id}                    → Set
+│   │     task_mapping:{user_id}:{session_id}        → Set
+│   │     task:{task_id}                             → JSON
+│   │   TTL 自动过期 + 惰性清理
+│   │
+│   ├── models.py                ← Pydantic 数据模型 (~97行)
+│   │   AgentRequest / AgentResponse /
+│   │   InterruptResponse / SystemInfoResponse /
+│   │   SessionInfoResponse / TaskInfoResponse /
+│   │   ActiveSessionInfoResponse / SessionStatusResponse
+│   │   LongMemRequest
+│   │
+│   └── feishu.py                ← 飞书 SDK 封装 (~270行)
+│       FeishuBotClient 类
+│       WSClient WebSocket 连接（无需公网 URL）
+│       im.message.receive_v1 事件处理
+│       send_text / reply_text / send_rich
+│       指数退避自动重连
+│
+├── docker/
+│   ├── postgresql/docker-compose.yml  ← PG 15
+│   └── redis/docker-compose.yaml      ← Redis
+│
+├── docs/
+│   ├── 01_后端业务核心流程.pdf
+│   ├── 02_API接口和数据模型描述.pdf
+│   ├── 03_前端业务核心流程.pdf
+│   └── 面试准备-Agent方向面试题.md     ← 本文件
+│
+├── logfile/app.log              ← 日志文件（ConcurrentRotatingHandler）
+│
+├── redisTest.py                 ← Redis 会话管理器独立测试
+├── devlog.md                    ← 开发日志（Git 追踪）
+├── README.md                    ← 项目完整文档
+└── .gitignore                   ← Git 忽略规则
+```
+
+---
+
+## 三、完整数据流
+
+### 3.1 异步调用流程（无 HITL）
+
+```
+用户 (Web UI / CLI / 飞书)
+  │ POST /agent/invoke {user_id, session_id, task_id, query}
+  ▼
+FastAPI (01_backendServer.py)
+  │ 1. 生成 task_id
+  │ 2. Redis 创建 session 状态 (status=idle)
+  │ 3. invoke_agent_task.delay(...) ──→ Celery Broker (Redis)
+  │ 4. 立即返回 {task_id, session_id}
+  ▼
+Celery Worker (utils/tasks.py invoke_agent_task)
+  │ 5. Redis 更新 session → running
+  │ 6. AsyncConnectionPool(...)         ← PostgreSQL
+  │ 7. AsyncPostgresSaver(pool)         ← 短期记忆
+  │ 8. AsyncPostgresStore(pool)         ← 长期记忆
+  │ 9. get_llm(LLM_TYPE)                ← LLM 客户端
+  │10. get_tools()                      ← 工具列表
+  │11. create_react_agent(model, tools, checkpointer, store)
+  │12. read_long_term_info(user_id)     ← 读取偏好
+  │13. agent.ainvoke({messages}, {thread_id: session_id})
+  ▼
+ReAct Agent 循环
+  │14. LLM 推理 → 是否调工具？
+  │    ├─ 否 → 生成最终回答
+  │    └─ 是 → 工具执行 → 结果回传 → 继续推理
+  ▼
+Celery Worker 继续
+  │15. process_agent_result(result)
+  │    ├─ completed → 保存最终结果
+  │    ├─ interrupted → 保存中断数据 (HITL)
+  │    └─ error → 保存错误信息
+  │16. Redis set_task_status(completed/failed)
+  │17. Redis update_session(更新状态)
+  ▼
+客户端
+  │18. 轮询 GET /agent/status/{u}/{s}/{t}
+  │    ├─ completed → 显示最终回答
+  │    ├─ interrupted → 显示 HITL 审批界面
+  │    └─ error → 显示错误
+```
+
+### 3.2 HITL 审批流程（四种模式）
+
+```
+Agent 决定调工具 book_hotel("如家酒店")
+  ↓
+HITL 包装器 (tools.py:76)
+  → interrupt(request)  ← 暂停 Agent
+  → Redis 状态 = interrupted
+  → 客户端轮询看到 interrupted
+  ↓
+客户端展示审批选项:
+  ┌──────────────────┐
+  │ 🔔 工具调用审批   │
+  │ 工具: book_hotel  │
+  │ 参数: {hotel_name: "如家酒店"}
+  │                    │
+  │ [✓批准] [✗拒绝]   │
+  │ [✏修改] [💬回复]  │
+  └──────────────────┘
+  ↓
+用户选择 → POST /agent/resume
+  │
+  ├─ "yes" (accept)
+  │   → Agent 继续，调 book_hotel("如家酒店") → 返回结果
+  │
+  ├─ "no" (reject)
+  │   → 工具返回 "该工具被拒绝使用，请尝试其他方法"
+  │   → Agent 换方案或直接回复
+  │
+  ├─ "edit" (修改参数)
+  │   → Agent 用修改后的参数调工具
+  │   → book_hotel("如家酒店(软件园店)")
+  │
+  └─ "response" (直接反馈)
+      → 不调工具，用户反馈直接作为工具结果
+      → Agent 据此回复
+```
+
+### 3.3 故障恢复流程
+
+```
+客户端崩溃后重启
+  │ 输入 user_id ("jin")
+  ▼
+GET /agent/active/sessionid/{user_id}
+  │ Redis 查询该用户的最近活跃 session
+  │ 返回: {active_session_id: "xxx-xxx"}
+  ▼
+GET /agent/status/{user_id}/{session_id}/{task_id}
+  │
+  ├─ interrupted → 自动显示 HITL 审批界面，继续中断处
+  ├─ completed  → 显示上次结果
+  ├─ idle       → 继续使用该会话
+  └─ error      → 新建会话
+```
+
+### 3.4 WebSocket 飞书 Bot 流程
+
+```
+飞书用户发消息 "hello"
+  │ im.message.receive_v1 事件
+  ▼
+飞书服务器 → WebSocket → FeishuBotClient (feishu.py)
+  │ 解析消息 → 提取 open_id, chat_id, text
+  ▼
+handle_feishu_message (03_feishuBot.py)
+  │ 构造 user_id = "feishu_" + open_id
+  │ 生成 session_id, task_id
+  │ POST /agent/invoke → 后端 API
+  │ 轮询 120s(2s间隔) GET /agent/status/...
+  │
+  ├─ completed → send_text(chat_id, final_reply)
+  └─ interrupted (auto_accept=true) → POST /agent/resume
+                                      → 继续轮询
+```
+
+---
+
+## 四、四种接入方式
+
+### 4.1 REST API（curl/Postman）
+
+```bash
+# 调用 Agent
+curl -s -X POST http://localhost:8001/agent/invoke \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"jin","session_id":"s1","task_id":"t1","query":"帮我查北京天气"}'
+
+# 查询状态
+curl -s http://localhost:8001/agent/status/jin/s1/t1
+
+# 批准工具调用
+curl -s -X POST http://localhost:8001/agent/resume \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"jin","session_id":"s1","task_id":"t1","response_type":"accept"}'
+
+# 修改参数后调用
+curl -s -X POST http://localhost:8001/agent/resume \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"jin","session_id":"s1","task_id":"t1","response_type":"edit","args":{"args":{"hotel_name":"全季酒店"}}}'
+```
+
+### 4.2 Rich CLI 终端
+
+```bash
+python 02_frontendServer.py
+
+# 交互:
+# 输入 user_id → 自动恢复上次会话
+# 输入问题 → Agent 回答
+# HITL 时输入 yes/no/edit/respons
+# status → 查看当前会话状态
+# new    → 新建会话
+# history → 恢复历史会话
+# setting → 写入长期记忆
+```
+
+### 4.3 Web UI（浏览器）
+
+```
+浏览器打开 http://localhost:8001
+
+特点:
+- 聊天式界面，左右分明
+- HITL 按钮审批（批准/拒绝/修改/回复）
+- 点击后显示"已提交，Agent 继续处理中..."
+- 自动轮询，结果实时刷新
+- user_id 存储在 localStorage
+```
+
+### 4.4 飞书 Bot
+
+```bash
+$env:FEISHU_APP_ID="cli_xxx"
+$env:FEISHU_APP_SECRET="xxx"
+python 03_feishuBot.py
+
+特点:
+- WebSocket 连接，无需公网 URL
+- 在飞书直接发消息给 Bot
+- 自动批准工具调用（可配置 FEISHU_AUTO_ACCEPT_TOOLS=false）
+- 处理中发送 "正在思考..."
+- 长回复自动折行
+```
+
+---
+
+## 五、面试高频问题（36题）
+
+### [1] Agent 架构与 LangGraph
+
+**Q1: 什么是 ReAct Agent？工作流程？**
+
+ReAct(Reasoning+Acting) 是「推理→行动→观察→推理」循环，LangGraph 已预制：
 
 ```python
 agent = create_react_agent(
-    model=llm_chat,          # LLM 模型
-    tools=tools,             # 工具列表（含 HITL 包装）
-    pre_model_hook=trimmed_messages_hook,  # 消息裁剪钩子
-    checkpointer=checkpointer,  # 短期记忆持久化
-    store=store                # 长期记忆存储
+    model=llm_chat,       # LLM
+    tools=tools,           # 带 HITL 的工具
+    pre_model_hook=...,    # 消息裁剪
+    checkpointer=...,      # 短期记忆 PG
+    store=...              # 长期记忆 PG
 )
 ```
+每次调用 `agent.ainvoke()` 后，LLM 会决定是调工具还是直接回复。调工具时 HITL 会中断等待审批。
 
-**追问：ReAct 相比 CoT (Chain-of-Thought) 有什么优势？**
-- ReAct 将推理和行动交织，LLM 可以先尝试调用工具获取外部信息，再基于实际结果调整推理，形成「思考→行动→观察→思考」的循环
-- 相比纯 CoT（只有推理，没有外部行动），ReAct 能访问实时数据、减少幻觉
+**Q2: LangGraph Checkpoint 机制？**
 
----
-
-### Q2: LangGraph 的 State Graph 和 Checkpoint 机制是什么？
-
-**答：** LangGraph 用有向图（DAG）建模 Agent 流程。每个节点是一个状态转换函数，边定义了流程走向。
-
-**Checkpoint（检查点）** 是 LangGraph 的核心容错机制：
-- 每执行完一个节点，LangGraph 自动将当前 State 快照保存到 checkpointer
-- 如果流程被中断（如 HITL 暂停），可以从最近的 checkpoint 恢复
-- 我用 PostgreSQL 作为 checkpointer 后端（`AsyncPostgresSaver`），保证服务重启后能恢复
-
+每执行一个节点自动保存 State 快照到 `AsyncPostgresSaver`。中断后可恢复：
 ```python
-# 恢复中断的 Agent — utils/tasks.py:502-505
-result = await agent.ainvoke(
+agent.ainvoke(
     Command(resume=command_data),
-    config={"configurable": {"thread_id": task_id}}  # thread_id 关联原会话
+    config={"configurable": {"thread_id": session_id}}
 )
 ```
+`thread_id=session_id` 保证同一会话共享对话历史。
+
+**Q3: 为什么用 LangGraph 而不是 LangChain Chain？**
+
+LangChain Chain 是线性的（A→B→C），Agent 需要循环/条件分支。LangGraph 提供：
+- 有向图状态机，节点可重复执行
+- 内置 checkpoint 中断恢复
+- `interrupt()` 函数直接支持 HITL
+- 与 LangChain 生态完全兼容（同样的 Tool/ChatModel/Messages）
 
 ---
 
-### Q3: LangGraph 和 LangChain 的关系是什么？为什么要用 LangGraph？
+### [2] LLM 调用与多模型
 
-**答：** LangChain 提供 LLM 调用的抽象层（ChatModel、Tools、Messages），LangGraph 在 LangChain 之上提供**状态机/图编排**能力。
+**Q4: 如何实现多厂商适配？**
 
-LangGraph 解决的核心问题：
-- **复杂控制流**：LangChain Chain 是线性的，Agent 需要循环+条件分支
-- **状态管理**：Agent 的多轮推理需要持久化和恢复状态
-- **中断恢复**：HITL 场景需要暂停等待人类输入后继续
-- **流式输出**：支持 streaming 中间结果
-
----
-
-## 2. LLM 调用与多模型适配
-
-### Q4: 项目中如何实现多厂商 LLM 适配？
-
-**答：** 在 `utils/llms.py` 中用策略模式统一接口，所有厂商都通过 `ChatOpenAI`（OpenAI 兼容接口）调用：
-
-| LLM_TYPE | 厂商 | API 地址 | 环境变量 |
-|---|---|---|---|
-| `openai` | OpenAI | 自定义 BASE_URL | `OPENAI_API_KEY` |
-| `qwen` | 阿里千问 | dashscope.aliyuncs.com | `DASHSCOPE_API_KEY` |
-| `ollama` | 本地开源 | localhost:11434 | 无需 |
-| `oneapi` | 中转代理 | 自建网关 | 硬编码 |
-
-核心设计：所有厂商都实现了 OpenAI 兼容的 `/v1/chat/completions` 接口，因此可以用同一个 `ChatOpenAI` 客户端，只需切换 `base_url` 和 `api_key`。
-
----
-
-### Q5: 如何控制 LLM 的温度（temperature）？为什么设为 0？
-
-**答：** 在 `utils/llms.py:99` 设置 `temperature=0`：
+策略模式——所有厂商用 `ChatOpenAI`（OpenAI 兼容接口），只需切换 base_url：
 ```python
-llm_chat = ChatOpenAI(
-    model=config["chat_model"],
-    temperature=0,  # 确定性输出
-)
+MODEL_CONFIGS = {
+    "openai": {"base_url": "https://api.llm.ustc.edu.cn/v1", ...},
+    "qwen":   {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", ...},
+    "ollama": {"base_url": "http://localhost:11434/v1", ...},
+    "oneapi": {"base_url": "http://139.224.72.218:3000/v1", ...},
+}
 ```
+`temperature=0` 保证确定性输出，`timeout=30` + `max_retries=2` 容错。
 
-**原因：** Agent 场景需要 LLM 严格遵循指令（选择工具、提取参数），temperature=0 保证输出的确定性和可预测性。高温度适合创意写作，低温度适合需要精确性的任务。
+**Q5: 为什么所有模型都走 OpenAI 兼容接口？**
+
+阿里千问、Ollama、OneAPI 都实现了 `/v1/chat/completions` 端点。用一个 `ChatOpenAI` 客户端 + 不同 base_url 和 api_key 即可统一管理，不需要为每家写独立 SDK 适配。
 
 ---
 
-### Q6: 如何处理 LLM 调用超时和重试？
+### [3] Human-in-the-Loop
 
-**答：** 在 `utils/llms.py:100-101`：
-```python
-timeout=30,       # 30 秒超时
-max_retries=2     # 失败后重试 2 次
-```
-
-这是 `ChatOpenAI` 内置的容错机制，避免单次 API 调用阻塞整个 Agent 流程。
-
----
-
-## 3. Human-in-the-Loop (HITL)
-
-### Q7: 什么是 Human-in-the-Loop？你项目中支持哪几种审查类型？
-
-**答：** HITL 是在 Agent 调用工具前插入人类审批节点的机制。工具调用需要人类确认后才能执行，防止 Agent 做出破坏性操作。
-
-我项目中支持 **4 种审查类型**（`utils/tools.py:68-74`）：
+**Q6: HITL 的四种审查类型？**
 
 | 类型 | 行为 | 场景 |
 |---|---|---|
-| `accept` | 允许工具调用，原参数执行 | 用户批准预定酒店 |
-| `reject` | 拒绝工具调用，Agent 需另想办法 | 参数明显错误 |
-| `edit` | 修改工具参数后执行 | "把酒店名换成 xx" |
-| `response` | 不调用工具，直接反馈信息 | "汉庭满了，换如家" |
+| accept | 原参数执行工具 | 参数正确，直接执行 |
+| reject | 拒绝，Agent 换方案 | 不想调用这个工具 |
+| edit | 修改参数后执行 | "酒店名错了，改成全季" |
+| response | 不调工具，直接反馈 | "汉庭满了，看看如家" |
+
+**Q7: HITL 技术原理？**
+
+核心是 `interrupt()` 函数：
+```python
+response = interrupt(request)  # 暂停 Agent，返回 None
+```
+1. LLM 决定调工具 → 触发 HITL 包装器
+2. `interrupt()` 暂停 Agent 执行
+3. State 自动保存到 PostgreSQL Checkpointer
+4. 前端轮询看到 status=interrupted
+5. 用户决策 → `Command(resume=...)` 继续
+6. LangGraph 从 Checkpoint 恢复，执行相应分支
+
+**Q8: 为什么不用流式代替 HITL 轮询？**
+
+HITL 可能需要等待数分钟（人类思考），SSE/WebSocket 连接难以维持。异步任务+轮询更可靠——连接中断后重连即可恢复状态。
 
 ---
 
-### Q8: HITL 的技术实现原理是什么？
+### [4] 记忆系统
 
-**答：** 核心是 LangGraph 的 `interrupt()` 函数（`utils/tools.py:76`）：
+**Q9: 短期记忆和长期记忆的区别？**
+
+| | 短期记忆 | 长期记忆 |
+|---|---|---|
+| 存储 | PostgreSQL Checkpointer | PostgreSQL Store |
+| 内容 | 全部对话历史 + State | 用户偏好键值对 |
+| 作用域 | 同一 session | 跨 session |
+| 裁剪 | trim_messages (max_tokens=20) | 不裁剪 |
+| 读取 | 自动 | 手动读取→拼到 system prompt |
+
+**Q10: 消息裁剪策略？**
+```python
+trim_messages(
+    messages=state["messages"],
+    max_tokens=20,        # 保留最近20条
+    strategy="last",      # 最新优先
+    start_on="human",     # 从 human 消息开始
+)
+```
+每次 LLM 调用前触发，防止上下文窗口溢出。
+
+**Q11: 长期记忆怎么应用？**
+
+用户设置偏好 → POST `/agent/write/longterm` → 存到 PG Store。
+每次 Agent 调用时读取 → 拼接到 system prompt：
+```python
+system_message = f"{system_prompt} 我的附加信息有:{long_term_info}"
+```
+
+---
+
+### [5] Function Calling 与工具
+
+**Q12: 工具定义到执行完整流程？**
 
 ```python
-response = interrupt(request)  # 暂停 Agent，等待人类响应
+@tool("book_hotel", description="酒店预定工具")
+async def book_hotel(hotel_name: str):
+    return f"成功预定了在{hotel_name}的住宿。"
 ```
+1. 定义时声明 name + description + args_schema
+2. 注册到 `create_react_agent(tools=[...])`
+3. LLM 根据用户请求匹配工具和参数
+4. 工具执行（或 HITL 中断）
+5. 结果回传给 LLM 综合回答
 
-完整流程：
-```
-Agent 决策调用工具
-    → 工具包装器触发 interrupt()
-    → Agent 进入 interrupted 状态
-    → 后端返回 interrupt_data 给前端（含工具名+参数）
-    → 人类做出决策（accept/reject/edit/response）
-    → 前端 POST /agent/resume 提交响应
-    → Celery 任务用 Command(resume=...) 继续执行
-    → 根据人类决策执行相应操作
-```
+**Q13: multiply 为什么没加 HITL？**
 
-**关键设计点：** 整个中断状态通过 Redis 存储（`utils/tasks.py:252-263`），前端通过轮询 `GET /agent/status/{user_id}/{session_id}/{task_id}` 获知是否需要人类介入。
+纯计算无副作用，不需要人类审批。设计原则：**有副作用的操作（下单、支付、删除）要 HITL，纯计算/查询类可以自动执行。**
 
----
+**Q14: 17 个高德地图工具怎么来的？**
 
-### Q9: HITL 为什么比纯自主 Agent 更安全？
-
-**答：**
-1. **防止破坏性操作**：大额交易、删除数据等操作必须人类确认
-2. **参数纠错**：LLM 可能提取错误参数（如酒店名 OCR 错误），人类可修正
-3. **合规要求**：金融、医疗等行业要求关键决策有人类参与
-4. **边界情况处理**：不可预见的场景，人类做最终判断
-
----
-
-## 4. 记忆系统：短期/长期记忆
-
-### Q10: 项目中如何管理短期记忆？为什么需要消息裁剪？
-
-**答：** 短期记忆通过 PostgreSQL Checkpointer 持久化 LangGraph 的 State（全部聊天消息）。
-
-**消息裁剪**（`utils/tasks.py:67-85`）解决 LLM 上下文窗口限制：
-
-```python
-def trimmed_messages_hook(state):
-    trimmed_messages = trim_messages(
-        messages=state["messages"],
-        max_tokens=20,        # 保留最近 20 条消息
-        strategy="last",      # 保留策略：最新优先
-        token_counter=len,    # 简化 token 计数
-        start_on="human",     # 从人类消息开始保留
-        allow_partial=False   # 不保留不完整的对话对
-    )
-    return {"llm_input_messages": trimmed_messages}
-```
-
-这个 hook 在**每次 LLM 调用前**触发，自动裁剪历史消息。
-
----
-
-### Q11: 长期记忆是如何实现读写分离的？
-
-**答：** 长期记忆用 PostgreSQL Store（`AsyncPostgresStore`）实现键值对存储：
-
-**写入**（`01_backendServer.py:44-80`）：
-```
-Namespace: ("memories", user_id)
-Key:       UUID (unique memory_id)
-Value:     {"data": "用户偏好信息..."}
-```
-
-**读取**（`utils/tasks.py:88-134`）：
-```python
-memories = await store.asearch(namespace, query="")
-# 拼接所有记忆内容
-long_term_info = " ".join([d.value["data"] for d in memories])
-```
-
-**应用方式**：读取的长期记忆拼接到系统提示词中，影响 Agent 行为（如记住用户说"我喜欢便宜的酒店"）。
-
----
-
-## 5. Function Calling 与工具系统
-
-### Q12: Function Calling（Tool Use）的完整流程是怎样的？
-
-**答：** 以 `book_hotel` 工具为例：
-
-```
-1. 定义工具 Schema
-   @tool("book_hotel", description="酒店预定工具")
-   async def book_hotel(hotel_name: str) -> str:
-       return f"成功预定了在{hotel_name}的住宿。"
-
-2. LLM 收到用户请求"帮我订如家酒店"
-3. LLM 决定调用 book_hotel(hotel_name="如家酒店")
-4. Tool Calling 请求被 HITL 包装器拦截
-5. interrupt() 暂停，等待人类审批
-6. 人类批准后，执行 book_hotel("如家酒店")
-7. 工具结果返回给 LLM，LLM 生成最终回复
-```
-
----
-
-### Q13: 为什么 `multiply` 工具没有加 HITL？
-
-**答：** 在 `utils/tools.py:172`：
-```python
-tools.append(multiply)  # 注意：没有 await add_human_in_the_loop()
-```
-
-`multiply` 是纯计算工具（无副作用），不需要人类审批。而 `book_hotel` 和高德地图工具（有外部效果/费用）需要 HITL。
-
-**设计原则：有副作用的工具需要审查，无副作用/幂等的工具可以自主执行。**
-
----
-
-## 6. MCP (Model Context Protocol)
-
-### Q14: 什么是 MCP？你项目中如何使用它？
-
-**答：** MCP（Model Context Protocol）是 Anthropic 提出的标准化工具协议。允许 Agent 通过统一接口调用任意第三方服务，而不需要为每个服务写适配代码。
-
-项目中使用 MCP 接入高德地图服务（`utils/tools.py:154-166`）：
-
+通过 MCP 协议自动发现：
 ```python
 client = MultiServerMCPClient({
     "amap-maps-streamableHTTP": {
-        "url": "https://mcp.amap.com/mcp?key=" + AMAP_MAPS_API_KEY,
+        "url": f"https://mcp.amap.com/mcp?key={API_KEY}",
         "transport": "streamable_http"
     }
 })
-amap_tools = await client.get_tools()  # 自动发现所有可用工具
+amap_tools = await client.get_tools()  # 自动拉取所有工具 schema
 ```
-
-**优势：**
-- 工具即插即用，不需要了解 MCP Server 内部实现
-- 支持多种传输协议（SSE、Streamable HTTP）
-- 工具发现自动化（`get_tools()` 拉取服务端定义的 schema）
+即插即用，不需要手动写每个工具的调用代码。
 
 ---
 
-### Q15: MCP 和传统 API 集成有什么区别？
+### [6] MCP 协议
 
-**答：**
+**Q15: MCP 和传统 API 集成的区别？**
 
-| 维度 | 传统 API 集成 | MCP |
+| | 传统 API | MCP |
 |---|---|---|
-| 接入方式 | 为每个 API 写调用代码 | 协议标准化，客户端统一 |
-| 工具发现 | 手动定义参数 schema | 自动从 Server 拉取 schema |
-| 类型安全 | 需手动验证 | Server 提供 JSON Schema |
-| 扩展性 | 新增 API 需改代码 | 新增 MCP Server 即可 |
+| 接入 | 为每个 API 写调用代码 | 协议标准化，统一客户端 |
+| 工具发现 | 手动定义 schema | 自动从 Server 拉取 |
+| 参数校验 | 手动验证 | Server 提供 JSON Schema |
+| 扩展 | 新增需改代码 | 新增 MCP Server 即可 |
+
+**Q16: MCP 支持哪些传输协议？**
+
+SSE（Server-Sent Events）和 Streamable HTTP。前者适合实时推送，后者适合请求-响应模式。项目中用的 `streamable_http`。
 
 ---
 
-## 7. FastAPI 后端架构
+### [7] FastAPI 后端
 
-### Q16: 为什么选择 FastAPI 而不是 Flask？
+**Q17: 为什么选 FastAPI？**
 
-**答：**
-1. **原生异步**：asyncio + uvicorn，Agent 调用是 IO 密集型（LLM API），异步能大幅提升并发
-2. **自动文档**：Pydantic 模型自动生成 OpenAPI/Swagger 文档
-3. **类型安全**：请求/响应自动校验，减少手动验证代码
-4. **生态兼容**：与 `psycopg`（asyncpg）、`redis.asyncio` 天然配合
+原生异步(asyncio+uvicorn)，Agent 是 IO 密集型（等 LLM API），异步能大幅提升并发。Pydantic 自动校验类型，自动生成 OpenAPI 文档。
 
----
-
-### Q17: 项目中 FastAPI 的生命周期管理是怎样的？
-
-**答：** 使用 `@asynccontextmanager` 实现 lifespan（`01_backendServer.py:84-127`）：
+**Q18: 生命周期管理怎么做的？**
 
 ```python
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    # === 启动阶段 ===
-    app.state.session_manager = get_session_manager()  # 连接 Redis
-    pool = AsyncConnectionPool(...)                      # 连接 PostgreSQL
-    app.state.checkpointer = AsyncPostgresSaver(pool)    # 短期记忆
-    app.state.store = AsyncPostgresStore(pool)           # 长期记忆
-    yield  # ← 服务运行中
-    # === 关闭阶段 ===
-    await session_manager.close()
+async def lifespan(app):
+    # 启动：创建 PG 连接池 + Redis 客户端
+    app.state.session_manager = get_session_manager()
+    pool = AsyncConnectionPool(Config.DB_URI, min_size=5, max_size=10)
+    app.state.checkpointer = AsyncPostgresSaver(pool)
+    app.state.store = AsyncPostgresStore(pool)
+    yield
+    # 关闭：清理连接
     await pool.close()
 ```
+连接池共享，请求不重复创建。
 
-**关键：** 连接池在应用级别管理，所有请求共享同一套数据库连接，避免频繁创建/销毁。
+**Q19: 错误处理分几层？**
 
----
-
-### Q18: 如何处理 API 层的错误状态？
-
-**答：** 分层处理：
-
-1. **参数校验**：Pydantic 自动校验，无效请求返回 422
-2. **业务逻辑**：手动抛 `HTTPException`（如 404 用户不存在、400 状态不允许恢复）
-3. **任务层**：捕获异常后更新 Redis 状态为 `error`/`failed`，前端可轮询获取
+1. Pydantic 自动校验请求 → 422
+2. 业务逻辑 `HTTPException` → 400/404
+3. Celery 任务异常 → Redis 状态 `failed`
+4. 前端轮询看到 error 状态
 
 ---
 
-## 8. Celery 异步任务队列
+### [8] Celery 异步任务
 
-### Q19: 为什么要用 Celery？Agent 请求为什么不能同步处理？
+**Q20: 为什么不能同步处理 Agent？**
 
-**答：** Agent 单次调用可能耗时 10-60+ 秒（多轮 LLM 调用 + 等待 HITL），同步处理会阻塞 FastAPI 的事件循环。
+单次 Agent 调用可能几十秒甚至几分钟（多轮 LLM + HITL 等待），同步会阻塞 FastAPI 事件循环。异步模式：**立即返回 task_id → 轮询拿结果**。
 
-**异步模式流程**（`utils/tasks.py:319-451`）：
-```
-1. POST /agent/invoke → 立即返回 task_id
-2. Celery Worker 异步执行 Agent
-3. 前端轮询 GET /agent/status/... 查询进度
-4. 状态: pending → running → interrupted/completed/error
-```
+**Q21: Celery 任务里为什么用 `asyncio.run()`？**
 
----
-
-### Q20: Celery 的 broker 是什么？为什么用 Redis？
-
-**答：** 在 `utils/tasks.py:44-49`：
 ```python
-celery_app = Celery(
-    main='01_backendServer',
-    broker=Config.CELERY_BROKER_URL  # redis://localhost:6379/0
-)
+@celery_app.task
+def invoke_agent_task(...):
+    async def run_invoke():
+        # ... 大量 async/await 调用 ...
+    return asyncio.run(run_invoke())
 ```
+Celery 任务函数是同步的，但 Agent 调用链全是异步的（`.ainvoke()`, `.ainput()` 等）。`asyncio.run()` 在同步上下文中跑异步协程。
 
-Redis 同时作为 **消息代理**（Celery broker）和**状态存储**（会话管理），一鱼两吃。对于 Agent 这种任务量不大但状态复杂的场景非常合适。高吞吐场景可换 RabbitMQ。
+**Q22: Worker 并发模式为什么用 `--pool=solo`？**
+
+Windows 上 Celery 默认的 `prefork` 池不稳定。`solo` 单进程运行，简单可靠。生产环境 Linux 上用 `gevent` 或 `eventlet`。
 
 ---
 
-### Q21: Celery 任务中为什么要用 `asyncio.run()` 包装异步代码？
+### [9] Redis 会话管理
 
-**答：** 在 `utils/tasks.py:451`：
-```python
-return asyncio.run(run_invoke())
-```
+**Q23: Redis 用了哪些数据结构？**
 
-Celery 任务函数本身是同步的（`@celery_app.task`），但 Agent 调用链全是异步的（`async def tool.ainvoke()`、`async def read_long_term_info()` 等）。用 `asyncio.run()` 在同步上下文中运行异步协程，这是 Celery + asyncio 混合使用的常见模式。
-
----
-
-## 9. Redis 会话管理
-
-### Q22: 你的 Redis 会话管理器用了什么数据结构？为什么？
-
-**答：** 在 `utils/redis.py` 中使用了三种 Redis 数据结构：
-
-| 数据结构 | Key 模式 | 用途 |
+| 结构 | Key 模式 | 用途 |
 |---|---|---|
-| **String (JSON)** | `session:{user_id}:{session_id}:{task_id}` | 会话详情（状态、最后响应等） |
-| **Set** | `user_sessions:{user_id}` | 用户的所有会话 ID 索引 |
-| **Set** | `task_mapping:{user_id}:{session_id}` | 会话的所有任务 ID 索引 |
+| String(JSON) | `session:{user}:{session}:{task}` | 会话详情 |
+| Set | `user_sessions:{user_id}` | 用户的所有会话索引 |
+| Set | `task_mapping:{user}:{session}` | 会话的所有任务索引 |
+| String(JSON) | `task:{task_id}` | 任务状态独立存储 |
 
-**设计理由：**
-- String(JSON) 存详情是因为会话数据需要**原子更新**为整体
-- Set 存索引是因为需要 **O(1) 去重**和快速查找
-- TTL 自动过期，避免僵尸会话堆积
+**Q24: TTL 过期策略？**
 
----
+`SESSION_TIMEOUT=300s`, `TTL=3600s`, `TASK_TTL=3600s`。每次 `update_session` 刷新 TTL。惰性清理——查询前扫描无效索引并清理。
 
-### Q23: Redis 中的数据过期策略是什么？
+**Q25: 惰性清理怎么工作？**
 
-**答：** 分层 TTL 设计（`utils/config.py:22-26`）：
-- `SESSION_TIMEOUT = 300` 秒：会话默认过期时间
-- `TTL = 3600` 秒：创建/更新会话时的默认 TTL
-- `TASK_TTL = 3600` 秒：任务状态独立过期时间
-
-每次 `update_session` 刷新 TTL，活跃会话不会过期。前端可通过动态修改 TTL 参数控制会话生命周期。
+`cleanup_user_tasks()` 在每次查询前运行：检查 Set 中每个 session_id 对应的实际数据是否还在（可能被 TTL 删除），不存在的从索引移除。不跑定时任务，零运维成本。
 
 ---
 
-### Q24: 为什么要做惰性清理（lazy cleanup）？
+### [10] PostgreSQL 持久化
 
-**答：** 在 `utils/redis.py:231-288`，`cleanup_user_tasks()` 在每次查询前运行，检查 Set 索引中的 session_id 对应的实际数据是否还在（可能已被 TTL 删除），不存在的则从索引中清理。
+**Q26: PG 承担的角色？**
 
-**设计选择：** 不跑定时任务（简单可维护），而是在查询时惰性清理。损失很小（每次 O(n) 扫描当前用户的会话），换来零运维复杂度。
+短期记忆（Checkpointer）存 LangGraph State，长期记忆（Store）存用户偏好。不用 Redis 因为：
+- Checkpoint 数据量大，需要持久化不丢失
+- PG 事务 ACID 保证状态一致性
+- Redis 适合热数据，PG 适合冷/温数据
 
----
+**Q27: 连接池大小怎么定？**
 
-## 10. PostgreSQL 持久化
-
-### Q25: 项目中 PostgreSQL 承担了什么角色？
-
-**答：**
-
-| 角色 | 组件 | 说明 |
-|---|---|---|
-| 短期记忆 Checkpointer | `AsyncPostgresSaver` | 保存 LangGraph 状态图快照 |
-| 长期记忆 Store | `AsyncPostgresStore` | 用户偏好等跨会话记忆 |
-
-**为什么不用 Redis 存 Checkpoint？**
-- Checkpoint 数据量大（整个对话历史 + State），需要持久化不丢失
-- PostgreSQL 支持事务 ACID，保证状态一致性
-- Redis 适合热数据（会话状态），PG 适合冷/温数据（记忆）
+`min_size=5, max_size=10`。Agent 是 IO 密集型（等 LLM API），实际 DB 操作极少。10 个连接足够。
 
 ---
 
-### Q26: 连接池的大小是如何决定的？
+### [11] Docker 基础设施
 
-**答：** 在 `utils/config.py:15-16`：
-```python
-MIN_SIZE = 5   # 最小空闲连接
-MAX_SIZE = 10  # 最大连接数
-```
+**Q28: Docker Compose 健康检查有什么用？**
 
-10 个连接对于 Agent 服务足够——因为 Agent 是 IO 密集型（等 LLM API），实际数据库操作少。连接数可按公式估算：`(核心数 × 2) + 磁盘数`。
-
----
-
-## 11. Docker 与基础设施
-
-### Q27: 为什么要用 Docker 运行数据库？
-
-**答：**
-1. **环境一致性**：开发/测试/生产同一镜像
-2. **隔离性**：PostgreSQL/Redis 与 Python 代码环境隔离
-3. **快速启动**：`docker-compose up -d` 两条命令即可
-4. **可复现**：别人拿到代码也能跑
-
----
-
-### Q28: docker-compose.yml 中的健康检查有什么作用？
-
-**答：** 在 `docker/postgresql/docker-compose.yml` 中：
 ```yaml
 healthcheck:
-  test: ["CMD", "pg_isready", "-U", "nange"]
-  interval: 10s
-  timeout: 5s
-  retries: 5
+  test: ["CMD", "pg_isready", "-U", "kevin"]
 ```
+Docker 知道容器是否真正 ready（不只是进程启动），配合编排工具自动重启不健康容器。
 
-**作用：**
-- Docker 知道容器是否真正 ready（不只是进程启动）
-- 配合 `depends_on` 确保依赖顺序
-- 生产环境配合编排工具自动重启不健康容器
+**Q29: 为什么用 Docker 跑数据库？**
+
+环境一致性、隔离性、快速启动（`docker-compose up -d` 两条命令）、可复现。
 
 ---
 
-## 12. 故障恢复与高可用
+### [12] 故障恢复
 
-### Q29: 客户端故障恢复是如何实现的？
+**Q30: 客户端故障如何恢复？**
 
-**答：** 流程（README 中描述）：
+用户崩溃后输入相同的 user_id → `GET /agent/active/sessionid/{user_id}` 获取最近会话 → `GET /agent/status/...` 检查状态 → 自动恢复到中断处。
 
-```
-1. 用户 test2 输入"上海天气如何？" → 会话进行中
-2. 客户端意外崩溃
-3. 用户重新启动客户端，输入 user_id = test2
-4. 后端查找该用户最近活跃的 session_id
-5. 自动恢复到中断前的会话状态
-```
+**Q31: 服务端故障如何恢复？**
 
-**实现关键：** 会话状态全部存 Redis，客户端完全无状态。`GET /agent/active/sessionid/{user_id}` 返回最近会话。
+LangGraph Checkpointer 机制——每一步 State 持久化到 PG。即使 Worker 重启，相同 `thread_id` 可从最近 checkpoint 恢复。
+
+**Q32: Celery 任务丢失怎么办？**
+
+任务结果写入 Redis `task:{task_id}`。失败时状态设为 `failed` + 错误信息。前端可获取最终状态。
 
 ---
 
-### Q30: 服务端故障恢复是什么？
+### [13] 系统设计综合
 
-**答：** LangGraph checkpointer 机制——Agent 执行的每一步 State 都持久化到 PostgreSQL。即使 FastAPI 或 Celery Worker 崩溃重启，可以从最近的 checkpoint 恢复：
+**Q33: 如果 QPS 从 10 到 1000 要改什么？**
+
+1. Celery：增加 Worker 数量 + `--concurrency=N`
+2. Redis：单实例 → 哨兵/集群
+3. PG：读写分离，Checkpoint 读走从库
+4. FastAPI：多实例 + Nginx 负载均衡
+5. LLM API：熔断限流（Token Bucket）
+6. 连接池：扩 PG 连接池
+7. 监控：Prometheus + Grafana
+
+**Q34: 当前最大的工程缺陷？**
+
+1. **无 API 认证**— 任何人都可调 `/agent/invoke`。应加 JWT/OAuth2
+2. **API Key 部分硬编码**— `oneapi` 的 key 写在源码里。应用环境变量/Vault
+3. **02_frontendServer.py 原为空**— 已从 05 项目复制修复
+4. **无测试**— 缺少单元/集成测试
+5. **日志轮转 5MB 太小**— 生产设 50-100MB
+
+**Q35: 描述从用户输入到显示的完整数据流？**
+
+```
+用户"帮我订如家酒店"
+  → 前端 POST /agent/invoke
+  → FastAPI 创建 Redis session → Celery 异步执行
+  → Worker 创建 ReAct Agent → LLM 推理
+  → book_hotel("如家酒店") HITL 中断
+  → 前端轮询看到 interrupted
+  → 用户点"批准"
+  → POST /agent/resume → Agent 继续
+  → 工具返回"成功预定"
+  → LLM 综合："已为您预订如家酒店！"
+  → Redis 状态 completed
+  → 前端轮询到结果 → 显示回复
+```
+
+---
+
+### [14] 安全意识
+
+**Q36: 项目考虑了哪些安全？**
+
+**已做：**
+- HITL 人工审查——有副作用操作需要审批
+- Pydantic 输入校验自动类型检查
+- Docker 容器隔离
+
+**应做未做（展示安全意识）：**
+- API 鉴权 (JWT/OAuth2)
+- Prompt Injection 防护（用户输入可能构造恶意 prompt）
+- Rate Limiting 防滥用
+- API Key 凭据管理（Vault/环境变量注入）
+- CORS 配置限制来源域名
+
+---
+
+## 六、支付与真实工具集成架构
+
+### 6.1 真实工具调用架构
+
+把 `book_hotel` 从假的改成真的：
 
 ```python
-config={"configurable": {"thread_id": task_id}}
+@tool("book_hotel", description="酒店预订工具")
+async def book_hotel(
+    hotel_name: str,
+    check_in: str,
+    check_out: str = None,
+    room_type: str = None
+):
+    """调用酒店供应商 API 创建真实订单"""
+    # 1. 搜索酒店房源
+    search_resp = await http_client.post(
+        "https://api.ctrip.com/hotel/search",
+        json={"name": hotel_name, ...}
+    )
+    hotel_id = search_resp.json()["hotel_id"]
+    
+    # 2. 创建订单
+    order_resp = await http_client.post(
+        "https://api.ctrip.com/hotel/order",
+        json={
+            "hotel_id": hotel_id,
+            "check_in": check_in,
+            "check_out": check_out,
+            "room_type": room_type,
+        },
+        headers={"Authorization": f"Bearer {CTRIP_API_KEY}"}
+    )
+    order = order_resp.json()
+    return f"订单已创建！订单号: {order['order_id']}"
 ```
 
-相同的 `thread_id` 让恢复的 Agent 定位到同一个 State 图。
+### 6.2 支付集成方案
 
----
-
-### Q31: 如何保证消息系统（Celery + Redis）的可靠性？
-
-**答：**
-1. Celery 任务结果写入 Redis `task:{task_id}`，带 TTL 防止泄漏
-2. 任务失败时更新状态为 `failed` + 错误信息
-3. 前端轮询可获取最终状态（成功/失败/中断）
-4. Redis 和 PostgreSQL 分别持久化不同层面数据，不单点依赖
-
----
-
-## 13. 系统设计与综合
-
-### Q32: 如果 QPS 从 10 提升到 1000，你的系统需要做哪些改造？
-
-**答：**
-
-1. **Celery**：增加 Worker 数量和并发数（`--concurrency=N`）
-2. **Redis**：单实例 → 哨兵/集群模式
-3. **PostgreSQL**：读写分离（主从复制），Checkpoint 读走从库
-4. **FastAPI**：多实例 + Nginx 负载均衡
-5. **LLM API**：增加重试、熔断、限流（Token Bucket）
-6. **连接池**：扩 PostgreSQL 连接池 MAX_SIZE
-7. **监控**：加 Prometheus + Grafana 监控 API 延迟和任务队列长度
-
----
-
-### Q33: 当前项目最大的工程缺陷是什么？你会如何改进？
-
-**答：**
-
-1. **没有 API 认证**：`/agent/invoke` 等端点无鉴权，任何人都可调用。应加 JWT/OAuth2
-2. **LLM API Key 部分硬编码**：`oneapi` 的 key 写在源码里（`utils/llms.py:41`）。应用环境变量或 Vault
-3. **02_frontendServer.py 为空**：缺少前端 demo
-4. **没有测试**：缺少单元测试和集成测试
-5. **日志文件轮转策略**：5MB 过小，生产环境应设 50-100MB
-6. **Celery 结果后端**：当前只用 Redis，生产可加数据库持久化任务结果
-
----
-
-### Q34: 为什么 Agent 系统选择异步任务模式而不是流式输出（SSE/WebSocket）？
-
-**答：** 两种模式各有适用场景：
-
-| 模式 | 优点 | 缺点 |
-|---|---|---|
-| 异步任务+轮询 | 容错性强，支持 HITL 暂停等待 | 用户需轮询，延迟较高 |
-| SSE 流式 | 实时反馈，体验好 | 不支持长时间暂停（HITL），连接易断 |
-
-本项目选择异步模式因为 HITL 场景下 Agent 可能被中断数分钟甚至更长，SSE 连接难以维持。
-
----
-
-### Q35: 描述一下从用户输入到 Agent 返回结果的完整数据流
+支付不能直接在工具里做——安全要求。标准做法：
 
 ```
-用户 ("帮我订如家酒店")
-  ↓
-前端 POST /agent/invoke {user_id, session_id, task_id, query, system_message}
-  ↓
-FastAPI: 创建/更新会话 → invoke_agent_task.delay() → 立即返回 task_id
-  ↓
-Celery Worker: 接收任务
-  ├─ AsyncConnectionPool ← PostgreSQL
-  ├─ AsyncPostgresSaver ← Checkpoint
-  ├─ AsyncPostgresStore ← 长期记忆
-  ├─ get_llm("qwen")    ← LLM Client
-  ├─ get_tools() ← 工具列表（含 MCP）
-  └─ create_react_agent(...) → agent.ainvoke()
-      ↓
-  LLM 推理: "需要调用 book_hotel(hotel_name='如家酒店')"
-      ↓
-  HITL 包装器: interrupt() → 暂停 → Redis 写入 interrupted 状态
-      ↓
-  前端轮询: GET /agent/status/... → status="interrupted"
-      ↓
-  人类: 输入 "yes" (accept)
-      ↓
-  前端 POST /agent/resume {type: "accept", args: {}}
-      ↓
-  Celery: Command(resume=...) → Agent 继续
-      ↓
-  book_hotel("如家酒店") 执行 → "成功预定了在如家酒店的住宿。"
-      ↓
-  LLM 综合: "已经为您预定了如家酒店的住宿！"
-      ↓
-  Redis: task 状态 → "completed", result → AgentResponse
-      ↓
-  前端轮询: status="completed" → 显示结果
+Agent: "已为您预订如家酒店，价格200元"
+        ↓
+Agent: "请点击链接完成支付：https://pay.example.com/order/xxx"
+        ↓
+用户点击 → 微信/支付宝扫码支付
+        ↓
+支付成功 → 微信回调 → POST /payment/callback
+        ↓
+Agent: "已收到您的付款，入住愉快！"
+```
+
+**后端需要新增：**
+
+```python
+@app.post("/payment/callback")
+async def payment_callback(data: dict):
+    """微信/支付宝支付回调"""
+    order_id = data["out_trade_no"]
+    # 更新订单状态
+    await update_order_status(order_id, "paid")
+    # 写入长期记忆：该用户对这家酒店满意
+    return {"code": "SUCCESS"}
+
+@tool("check_order", description="查询订单状态")
+async def check_order(order_id: str):
+    """Agent 可查询订单进度"""
+    status = get_order_status(order_id)
+    return f"订单 {order_id} 状态: {status}"
+```
+
+### 6.3 和现有 HITL 的配合
+
+现有 HITL 审批和支付是两回事：
+
+```
+HITL 审批 → 是否允许调用 book_hotel？
+    用户批准
+    → book_hotel 执行 → 创建订单 → 返回支付链接
+    → 用户自行完成支付（不在 HITL 范围内）
+    → Agent 可调 check_order 查看支付状态
 ```
 
 ---
 
-## 14. 安全意识
+## 七、自测清单
 
-### Q36: 如果你在面试中被问到「你项目中考虑了哪些安全问题」，你怎么回答？
+面试前逐条检查：
 
-**答：**
+### 项目理解
+- [ ] 能在白板上画出系统架构图（FastAPI + Celery + PG + Redis + Agent）
+- [ ] 能画出用户消息→回复的完整数据流
+- [ ] 能说出每个文件的作用
 
-**已做的：**
-1. **HITL 人工审查**：有副作用的工具调用需要人类确认（防止 Agent 擅自执行）
-2. **Pydantic 输入校验**：所有 API 请求自动校验类型和必填字段
-3. **数据库密码配置化**：通过环境变量覆盖（`DB_URI`），不硬编码
-4. **Docker 隔离**：基础设施容器化，不暴露到公网
+### Agent 原理
+- [ ] 能解释 ReAct 循环每一步
+- [ ] 能解释 `interrupt()` 实现原理
+- [ ] 能说出 HITL 四种类型和使用场景
+- [ ] 能解释 thread_id 为什么用 session_id 而不是 task_id
 
-**应做但未做的（可展示安全意识）：**
-1. API 鉴权（JWT/OAuth2）
-2. LLM prompt injection 防护（用户输入可能构造恶意 prompt）
-3. Rate limiting（防止 API 滥用）
-4. API key 凭据管理（Vault/环境变量注入，勿硬编码）
-5. SQL 注入防护（使用参数化查询—psycopg 默认安全）
-6. CORS 配置（限制允许的来源域名）
+### 系统设计
+- [ ] 能说出为什么用 Celery 异步
+- [ ] 能说出为什么用 PG 存短期记忆而不是 Redis
+- [ ] 能说出 Redis 的数据结构选型理由
+- [ ] 能说出消息裁剪的必要性和策略
 
----
+### 故障排查
+- [ ] "前端报错 missing status field" 怎么修
+- [ ] "Agent 不停调工具停不下来" 可能原因
+- [ ] "飞书 Bot 连不上" 排查步骤
+- [ ] "Celery 任务提交了但没执行" 怎么查
 
-## 快速自测清单
-
-面试前可以用这些问题自我检查：
-
-- [ ] 能画出 Agent 从接收到返回的完整数据流图
-- [ ] 能解释 ReAct 循环的每一步发生了什么
-- [ ] 能说出 LangGraph interrupt() 的实现原理
-- [ ] 能比较同步 vs 异步、Celery vs SSE 的优劣
-- [ ] 能说出 Redis 每种数据结构的选型理由
-- [ ] 能解释消息裁剪的必要性和策略
-- [ ] 能说出至少 3 个项目的改进方向
-- [ ] 能解释 MCP 协议的价值
-- [ ] 能回答「为什么用 Docker Compose 而不是 k8s」
-- [ ] 能在白板上画出系统架构图
+### 扩展思考
+- [ ] QPS 提升 100 倍要改什么
+- [ ] 如何接真实支付
+- [ ] 当前项目最大的 3 个缺陷
+- [ ] Python 3.11 vs 3.12 性能差异
 
 ---
 
-> 📝 本文档基于 `ReActAgentHILApiMultiSessionTask` 项目源码分析生成。
-> 建议配合项目源码阅读，并尝试自己回答后再看答案。
+> 📝 本文档基于 `ReActAgentHILApiMultiSessionTask` 项目源码深度分析生成。
+> 建议结合项目源码阅读，尝试自己回答后再看答案。
