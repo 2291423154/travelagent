@@ -15,7 +15,7 @@ services:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:             # 健康检查
-      test: ["CMD", "pg_isready", "-U", "nange"]
+      test: ["CMD", "pg_isready", "-U", "kevin"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -29,6 +29,11 @@ logfile/
 # Eval results
 tests/eval_results.json
 
+# Course materials (not needed)
+docs/01_*.pdf
+docs/02_*.pdf
+docs/03_*.pdf
+
 # Python cache
 __pycache__/
 *.pyc
@@ -58,3 +63,8 @@ celerybeat.pid
 
 # PDF docs (binary)
 docs/*.pdf
+
+# Dev journal
+logfile/
+devlog.md
+docs/面试准备-Agent方向面试题.md
