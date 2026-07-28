@@ -49,7 +49,7 @@ logger.addHandler(handler)
 # 创建Celery实例
 celery_app = Celery(
     # Celery应用名称
-    main='01_backendServer',
+    main='server',
     # 消息代理URL，使用Redis
     broker=Config.CELERY_BROKER_URL
 )
@@ -401,7 +401,7 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                     {"messages": messages},
                     config={
                         "configurable": {"thread_id": session_id},
-                        "recursion_limit": 5,
+                        "recursion_limit": 8,
                     }
                 )
 
@@ -512,7 +512,7 @@ def resume_agent_task(user_id: str, session_id: str, task_id: str, command_data:
                     Command(resume=command_data),
                     config={
                         "configurable": {"thread_id": session_id},
-                        "recursion_limit": 5,
+                        "recursion_limit": 8,
                     }
                 )
 

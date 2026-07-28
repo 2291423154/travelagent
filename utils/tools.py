@@ -167,8 +167,18 @@ async def get_tools():
     # 为工具添加人工审查
     tools = [await add_human_in_the_loop(index) for index in amap_tools]
 
+    # RAG 知识库检索
+    @tool("search_travel_knowledge", description="【首选工具】查旅游攻略、历史文化、美食推荐、景点背景、游玩路线、避坑指南、省钱技巧。当用户问'XX有什么好吃的/好玩的/值得去的/历史典故/注意事项/怎么省钱'时，必须优先使用此工具。不要用高德搜索代替——高德只返回POI坐标列表，没有深度攻略和人文内容。此工具和高德互补：此工具拿知识，高德拿实时数据。")
+    async def search_travel_knowledge(query: str):
+        """检索离线知识库——包含详细旅游攻略、历史文化背景、美食推荐排名、游玩路线规划、省钱技巧。数据来自9本专业旅游攻略PDF。返回结构化文本。"""
+        from utils.rag.retriever import get_retriever
+        retriever = get_retriever()
+        result = retriever.format_for_llm(query, top_k=3)
+        return result if result else "知识库暂无相关内容。"
+
     # 追加自定义工具并添加人工审查
     tools.append(await add_human_in_the_loop(book_hotel))
+    tools.append(await add_human_in_the_loop(search_travel_knowledge))
     tools.append(multiply)
 
     # 返回工具列表

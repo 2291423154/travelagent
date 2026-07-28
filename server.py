@@ -11,6 +11,9 @@ if sys.platform == "win32":
     import warnings
     warnings.filterwarnings("ignore", category=RuntimeWarning, module="psycopg")
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os as _os
 from typing import Dict
 import uuid
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -139,6 +142,22 @@ app = FastAPI(
     description="基于LangGraph提供AI Agent服务",
     lifespan=lifespan
 )
+
+# 静态文件目录
+_STATIC_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "static")
+if _os.path.isdir(_STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+
+# Web 首页
+@app.get("/")
+async def root():
+    """返回 Web UI 首页"""
+    index_path = _os.path.join(_STATIC_DIR, "index.html")
+    if _os.path.isfile(index_path):
+        return FileResponse(index_path)
+    return {"message": "ReAct Agent API 服务运行中", "docs": "/docs"}
+
 
 # API接口:异步运行智能体并返回任务ID
 @app.post("/agent/invoke", response_model=dict)

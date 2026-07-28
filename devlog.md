@@ -11,13 +11,13 @@
 | 文件 | 行数 | 说明 |
 |---|---|---|
 | `utils/feishu.py` | ~200 | 飞书 SDK 封装（WSClient + 消息收发 + 重连） |
-| `03_feishuBot.py` | ~220 | 飞书 Bot 主进程（消息→Agent→回复） |
+| `feishu_bot.py` | ~220 | 飞书 Bot 主进程（消息→Agent→回复） |
 
 ### 修改文件
 | 文件 | 变更 |
 |---|---|
 | `utils/config.py` | 新增 `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_AUTO_ACCEPT_TOOLS` |
-| `02_frontendServer.py` | 从 05 项目复制，适配 task_id 参数，新增 task_id 全局追踪 |
+| `cli_chat.py` | 从 05 项目复制，适配 task_id 参数，新增 task_id 全局追踪 |
 
 ### 技术选型
 - SDK: `lark-oapi`（飞书官方 Python SDK）
@@ -30,8 +30,8 @@
 ```bash
 $env:FEISHU_APP_ID="cli_xxx"
 $env:FEISHU_APP_SECRET="xxx"
-python 03_feishuBot.py          # 飞书 Bot
-python 02_frontendServer.py     # Rich CLI 前端
+python feishu_bot.py          # 飞书 Bot
+python cli_chat.py     # Rich CLI 前端
 ```
 
 ---
@@ -71,7 +71,7 @@ python 02_frontendServer.py     # Rich CLI 前端
 - LLM：阿里通义千问（`DASHSCOPE_API_KEY` 已配置）
 
 ### 代码修复
-- `01_backendServer.py:6-7`：Windows 事件循环策略移到文件顶部，避免 ProactorEventLoop 错误
+- `server.py:6-7`：Windows 事件循环策略移到文件顶部，避免 ProactorEventLoop 错误
 
 ## 2026-07-06 — LLM 切换：阿里千问 → 科大 API ✅
 
@@ -100,8 +100,8 @@ python 02_frontendServer.py     # Rich CLI 前端
 ### 当前项目状态
 | 文件 | 状态 | 说明 |
 |---|---|---|
-| `01_backendServer.py` | 已完成 | FastAPI 后端，11 个 API 端点 |
-| `02_frontendServer.py` | **空文件** | Rich 前端未实现 |
+| `server.py` | 已完成 | FastAPI 后端，11 个 API 端点 |
+| `cli_chat.py` | **空文件** | Rich 前端未实现 |
 | `utils/config.py` | 已完成 | 配置中心，默认使用 qwen |
 | `utils/llms.py` | 已完成 | 4 种 LLM 方案适配 |
 | `utils/tools.py` | 已完成 | HITL 工具 + MCP Server |

@@ -54,7 +54,7 @@ def reset_current_task_id():
 
 
 # 调用API接口运行智能体并返回大模型结果或中断数据
-def invoke_agent(user_id: str, session_id: str, query: str, system_message: str = "你是一个高效助手。你可以使用工具获取信息，但必须：1)最多调3次工具就必须给出最终回答 2)工具结果够了就立即停止 3)不需要工具时直接回复 4)用中文简洁回复"):
+def invoke_agent(user_id: str, session_id: str, query: str, system_message: str = "你是旅游助手。工具选择规则：1)问攻略/美食/历史/文化→用search_travel_knowledge 2)问实时天气/交通/导航/周边搜索→用高德maps_系列工具 3)混合问题（如推荐餐厅+怎么去）→先用search_travel_knowledge拿攻略，再调高德查路线 4)最多调5次工具，够了就立即停止 5)不需要工具时直接回复。用中文简洁回复"):
     """
     调用智能体处理查询，提交后轮询等待完成或中断
 

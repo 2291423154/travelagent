@@ -18,6 +18,20 @@ env/
 .idea/
 .vscode/
 *.swp
+
+# RAG data (large binary files)
+utils/rag/rag_db/
+utils/rag/documents/
+
+# Logs
+logfile/
+
+# Eval results
+tests/eval_results.json
+
+# Python cache
+__pycache__/
+*.pyc
 *.swo
 *.sublime-*
 

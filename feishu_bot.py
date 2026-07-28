@@ -6,7 +6,7 @@
 - 支持 HITL 人工审查模式
 
 使用方式:
-    python 03_feishuBot.py
+    python feishu_bot.py
 """
 
 import sys

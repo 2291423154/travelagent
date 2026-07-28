@@ -4,6 +4,15 @@ from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langchain_openai import ChatOpenAI,OpenAIEmbeddings
 from .config import Config
 
+# 自动加载项目根目录的 .env 文件（所有进程：Celery、Backend、Frontend 都从这里加载）
+_ENV_PATH = os.path.join(os.path.dirname(__file__), "..", ".env")
+if os.path.exists(_ENV_PATH):
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_ENV_PATH)
+    except ImportError:
+        pass
+
 
 # # 设置日志基本配置，级别为DEBUG或INFO
 logger = logging.getLogger(__name__)
@@ -58,7 +67,7 @@ MODEL_CONFIGS = {
 
 
 # 默认配置
-DEFAULT_LLM_TYPE = "qwen"
+DEFAULT_LLM_TYPE = "openai"
 DEFAULT_TEMPERATURE = 0
 
 

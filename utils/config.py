@@ -1,5 +1,14 @@
 import os
 
+# 自动加载项目根目录 .env（所有入口文件：Backend/Celery/Frontend/FeishuBot 都先读到 Config）
+_ENV_PATH = os.path.join(os.path.dirname(__file__), "..", ".env")
+if os.path.exists(_ENV_PATH):
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_ENV_PATH)
+    except ImportError:
+        pass
+
 
 class Config:
     """统一的配置类，集中管理所有常量"""

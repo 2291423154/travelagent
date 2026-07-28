@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReAct Agent 智能助手</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font:16px/1.5 'Segoe UI','Microsoft YaHei',sans-serif;background:#1a1a2e;color:#eee;height:100vh;display:flex;flex-direction:column}
+.header{background:#16213e;padding:12px 20px;display:flex;align-items:center;gap:12px;border-bottom:2px solid #0f3460}
+.header h1{font-size:18px;color:#e94560}
+.badge{font-size:11px;background:#e94560;color:#fff;padding:2px 8px;border-radius:10px}
+.user-bar{background:#0f3460;padding:6px 20px;font-size:12px;color:#aaa;display:flex;gap:16px}
+.chat{flex:1;overflow-y:auto;padding:16px}
+.msg{margin-bottom:12px;max-width:85%;animation:fadeIn .3s}
+.msg.user{margin-left:auto;text-align:right}
+.msg.user .bubble{background:#e94560;color:#fff;border-radius:16px 16px 4px 16px}
+.msg.agent .bubble{background:#16213e;border-radius:16px 16px 16px 4px;border:1px solid #0f3460}
+.msg.system .bubble{background:#333;color:#999;font-size:12px;text-align:center;margin:0 auto;max-width:60%;border-radius:8px}
+.bubble{padding:10px 14px;display:inline-block;word-break:break-word;white-space:pre-wrap}
+.msg.agent .bubble{display:block}
+.interrupt-box{background:#2d2d0f;border:1px solid #e9c445;border-radius:8px;padding:12px;margin:8px 0}
+.interrupt-box .title{color:#e9c445;font-weight:bold;margin-bottom:8px}
+.interrupt-box .btns{display:flex;gap:6px;flex-wrap:wrap}
+.interrupt-box button{padding:6px 12px;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold}
+.btn-yes{background:#2e7d32;color:#fff}
+.btn-no{background:#c62828;color:#fff}
+.btn-edit{background:#1565c0;color:#fff}
+.btn-resp{background:#6a1b9a;color:#fff}
+.interrupt-box input{flex:1;min-width:200px;padding:6px 10px;border:1px solid #555;border-radius:4px;background:#222;color:#eee;font-size:13px}
+.input-bar{display:flex;padding:12px;gap:8px;background:#16213e;border-top:2px solid #0f3460}
+.input-bar input{flex:1;padding:10px 14px;border:none;border-radius:20px;background:#1a1a2e;color:#eee;font-size:14px;outline:none;border:1px solid #0f3460}
+.input-bar input:focus{border-color:#e94560}
+.input-bar button{padding:10px 20px;border:none;border-radius:20px;background:#e94560;color:#fff;font-weight:bold;cursor:pointer;font-size:14px}
+.input-bar button:disabled{opacity:.5;cursor:not-allowed}
+.interrupt-box .feedback{font-size:13px;font-weight:bold;margin-top:6px;color:#4caf50}
+.interrupt-box .feedback.error{color:#f44336}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid transparent;border-top:2px solid #e94560;border-radius:50%;animation:spin .8s linear infinite;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>ReAct Agent</h1>
+  <span class="badge">HITL</span>
+  <span style="font-size:12px;color:#888">生产级 Agent 智能助手</span>
+</div>
+
+<div class="user-bar">
+  <span>用户: <b id="userIdDisplay">---</b></span>
+  <span>会话: <b id="sessionIdDisplay">---</b></span>
+  <span id="statusBadge"></span>
+</div>
+
+<div class="chat" id="chatContainer">
+  <div class="msg system"><div class="bubble">欢迎使用 ReAct Agent！输入问题开始对话。</div></div>
+</div>
+
+<div class="input-bar">
+  <input id="msgInput" placeholder="输入你的问题..." autofocus onkeydown="if(event.key==='Enter')sendMessage()">
+  <button id="sendBtn" onclick="sendMessage()">发送</button>
+</div>
+
+<script>
+// ============ 状态管理 ============
+const API = 'http://localhost:8001';
+let userId = localStorage.getItem('agent_user_id') || ('web_' + Date.now());
+let sessionId = '';
+let currentTaskId = '';
+let busy = false;
+
+localStorage.setItem('agent_user_id', userId);
+document.getElementById('userIdDisplay').textContent = userId;
+
+// ============ UI 工具 ============
+function chat() { return document.getElementById('chatContainer'); }
+function scrollDown() { chat().scrollTop = chat().scrollHeight; }
+
+function addMsg(role, text) {
+  const cls = role === 'user' ? 'user' : role === 'system' ? 'system' : 'agent';
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
+  chat().appendChild(div);
+  scrollDown();
+  return div;
+}
+
+function addInterrupt(interruptData, onDecision) {
+  const action = interruptData.action_request?.action || 'unknown';
+  const args = JSON.stringify(interruptData.action_request?.args || {}, null, 2);
+  const desc = escapeHtml(interruptData.description || '工具调用需要审批');
+
+  const div = document.createElement('div');
+  div.className = 'msg agent';
+  div.innerHTML = '<div class="bubble"><div class="interrupt-box">' +
+    '<div class="title">🔔 工具调用审批</div>' +
+    '<div style="margin:8px 0;font-size:13px;white-space:pre-wrap">' + desc + '</div>' +
+    '<div style="font-size:12px;color:#aaa;margin:4px 0"><b>工具:</b> ' + action + '<br><b>参数:</b> ' + args + '</div>' +
+    '<div class="btns" id="btnGroup' + currentTaskId + '">' +
+      '<button class="btn-yes" data-action="accept">✓ 批准</button>' +
+      '<button class="btn-no" data-action="reject">✗ 拒绝</button>' +
+      '<button class="btn-edit" data-action="edit">✏ 修改参数</button>' +
+      '<button class="btn-resp" data-action="response">💬 直接回复</button>' +
+    '</div>' +
+    '<div class="feedback" id="feedback' + currentTaskId + '"></div>' +
+    '<div id="editBox' + currentTaskId + '" style="display:none;margin-top:8px;gap:6px;">' +
+      '<input id="editInput' + currentTaskId + '" placeholder="输入新参数(JSON) 或 回复内容">' +
+      '<button class="btn-yes" id="submitEditBtn">提交</button>' +
+    '</div>' +
+  '</div></div>';
+  chat().appendChild(div);
+  scrollDown();
+
+  // 事件绑定
+  const btns = div.querySelectorAll('.btns button');
+  const btnGroup = div.querySelector('[id^="btnGroup"]');
+  const editBox = div.querySelector('[id^="editBox"]');
+  const editInput = div.querySelector('[id^="editInput"]');
+  const submitBtn = div.querySelector('#submitEditBtn');
+  const feedbackEl = div.querySelector('[id^="feedback"]');
+
+  function showFeedback(text, isError) {
+    feedbackEl.textContent = text;
+    feedbackEl.className = 'feedback' + (isError ? ' error' : '');
+  }
+
+  function disableAll() {
+    btns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+    if (submitBtn) submitBtn.disabled = true;
+    if (editInput) editInput.disabled = true;
+  }
+
+  btns.forEach(btn => {
+    btn.addEventListener('click', function() {
+      const act = this.dataset.action;
+      const labelMap = { accept: '批准', reject: '拒绝', edit: '修改参数', response: '直接回复' };
+      const actionLabel = labelMap[act] || act;
+
+      if (act === 'edit' || act === 'response') {
+        editBox.style.display = 'flex';
+        submitBtn.onclick = function() {
+          const val = editInput.value.trim();
+          if (!val) { showFeedback('请输入内容', true); return; }
+          let payloadArgs;
+          try {
+            if (act === 'edit') {
+              payloadArgs = { args: JSON.parse(val) };
+            } else {
+              payloadArgs = { feedback: val };
+            }
+          } catch(e) {
+            showFeedback('JSON 格式错误: ' + e.message, true);
+            return;
+          }
+          disableAll();
+          editBox.style.display = 'none';
+          showFeedback('已提交「' + actionLabel + '」，Agent 继续处理中...');
+          onDecision(act, payloadArgs.args || payloadArgs);
+        };
+        return;
+      }
+      // yes / no
+      disableAll();
+      showFeedback('已提交「' + actionLabel + '」，Agent 继续处理中...');
+      onDecision(act, null);
+    });
+  });
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function setBusy(b) {
+  busy = b;
+  document.getElementById('sendBtn').disabled = b;
+  document.getElementById('msgInput').disabled = b;
+  document.getElementById('statusBadge').innerHTML = b
+    ? '<span style="color:#e9c445"><span class="spinner"></span>处理中...</span>'
+    : '<span style="color:#2e7d32">✓ 就绪</span>';
+}
+
+// ============ 核心逻辑 ============
+async function sendMessage() {
+  if (busy) return;
+  const input = document.getElementById('msgInput');
+  const query = input.value.trim();
+  if (!query) return;
+
+  input.value = '';
+  addMsg('user', query);
+  setBusy(true);
+
+  // 生成会话 ID 和任务 ID
+  if (!sessionId) sessionId = crypto.randomUUID();
+  currentTaskId = crypto.randomUUID();
+  document.getElementById('sessionIdDisplay').textContent = sessionId.slice(0, 8) + '...';
+
+  try {
+    // 提交任务
+    const resp = await fetch(API + '/agent/invoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        session_id: sessionId,
+        task_id: currentTaskId,
+        query: query,
+      }),
+    });
+    if (!resp.ok) throw new Error('API错误: ' + resp.status);
+    const submitResult = await resp.json();
+    currentTaskId = submitResult.task_id || currentTaskId;
+
+    // 轮询
+    await pollStatus(currentTaskId);
+  } catch (e) {
+    addMsg('system', '❌ 错误: ' + e.message);
+    setBusy(false);
+  }
+}
+
+async function pollStatus(taskId) {
+  const maxWait = 180;
+  const interval = 2;
+  const startTime = Date.now();
+
+  while ((Date.now() - startTime) / 1000 < maxWait) {
+    await sleep(interval * 1000);
+
+    try {
+      const resp = await fetch(API + '/agent/status/' + userId + '/' + sessionId + '/' + taskId);
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const status = data.status;
+
+      if (status === 'completed') {
+        const lastResp = data.last_response;
+        if (lastResp && lastResp.result) {
+          const msgs = lastResp.result.messages || [];
+          const lastMsg = msgs[msgs.length - 1];
+          if (lastMsg && lastMsg.content) {
+            addMsg('agent', lastMsg.content);
+          }
+        }
+        setBusy(false);
+        return;
+      }
+
+      if (status === 'interrupted') {
+        setBusy(false);
+        const lastResp = data.last_response;
+        const interruptData = (lastResp && lastResp.interrupt_data) || {};
+        await new Promise(resolve => {
+          addInterrupt(interruptData, (type, args) => resumeTask(taskId, type, args, resolve));
+        });
+        return;
+      }
+
+      if (status === 'error') {
+        const errMsg = (data.last_response && data.last_response.message) || '未知错误';
+        addMsg('system', '❌ Agent 处理出错: ' + errMsg);
+        setBusy(false);
+        return;
+      }
+    } catch (e) {
+      // 继续轮询
+    }
+  }
+
+  setBusy(false);
+  addMsg('system', '⏰ 响应超时，请检查 Celery Worker 是否运行');
+}
+
+async function resumeTask(taskId, type, args, done) {
+  setBusy(true);
+  try {
+    const payload = {
+      user_id: userId,
+      session_id: sessionId,
+      task_id: taskId,
+      response_type: type,
+    };
+    if (args) payload.args = args;
+
+    const resp = await fetch(API + '/agent/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error('Resume错误: ' + resp.status);
+
+    await pollStatus(taskId);
+  } catch (e) {
+    addMsg('system', '❌ 恢复失败: ' + e.message);
+    setBusy(false);
+  }
+  done();
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</body>
+</html>
