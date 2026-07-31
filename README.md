@@ -22,7 +22,9 @@ docker-compose -f docker/redis/docker-compose.yaml up -d
 # 2. 配置 API Key
 cp .env.example .env  # 编辑 .env 填入你的 Key
 
-# 3. 构建 RAG 知识库（将攻略 PDF 放入 utils/rag/documents/）
+# 3. 构建 RAG 知识库
+#    项目自带一份示例文档 docs/sample_travel_guide.txt
+#    把你自己的旅游攻略 PDF 放入 utils/rag/documents/ 即可扩展
 pip install chromadb PyPDF2 python-dotenv lark-oapi
 python -m utils.rag.build_index
 

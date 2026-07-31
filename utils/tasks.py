@@ -1,5 +1,6 @@
 import sys
 import asyncio
+import os
 
 # Windows 平台事件循环策略修复（Celery Worker 也需要）
 if sys.platform == "win32":
@@ -22,6 +23,42 @@ from .tools import get_tools
 from .models import AgentResponse
 from .redis import RedisSessionManager, get_session_manager
 from langgraph.types import interrupt, Command
+
+# ---- Langfuse 可观测性（懒加载，未安装或未配置则跳过）----
+_langfuse_client = None
+
+
+def get_langfuse_client():
+    """全局复用 Langfuse client（最佳实践：client 只初始化一次，handler 每次新建）"""
+    global _langfuse_client
+    if _langfuse_client is not None:
+        return _langfuse_client
+    pk = os.getenv("LANGFUSE_PUBLIC_KEY")
+    sk = os.getenv("LANGFUSE_SECRET_KEY")
+    if not pk or not sk:
+        return None
+    from langfuse import Langfuse
+    _langfuse_client = Langfuse(
+        public_key=pk,
+        secret_key=sk,
+        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+    )
+    logger.info(f"Langfuse client 初始化成功")
+    return _langfuse_client
+
+
+def get_langfuse_handler():
+    """为单次 Agent 调用创建 callback handler。
+    langfuse v3: CallbackHandler 无参构造，配置从 singleton client / 环境变量读取。
+    未安装 langfuse 或未配置 key 时返回 None，不影响主流程。"""
+    try:
+        from langfuse.langchain import CallbackHandler
+        if get_langfuse_client() is None:
+            return None
+        return CallbackHandler()
+    except Exception as e:
+        logger.warning(f"Langfuse handler 创建失败（跳过）: {e}")
+        return None
 
 
 # 设置日志基本配置，级别为DEBUG或INFO
@@ -397,13 +434,23 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                 ]
 
                 # 调用智能体（recursion_limit 防止无限循环，每轮 resume 累积计数由 Redis 控制）
+                lf_handler = get_langfuse_handler()
+                invoke_config = {
+                    "configurable": {"thread_id": session_id},
+                    "recursion_limit": 8,
+                }
+                if lf_handler:
+                    invoke_config["callbacks"] = [lf_handler]
                 result = await agent.ainvoke(
                     {"messages": messages},
-                    config={
-                        "configurable": {"thread_id": session_id},
-                        "recursion_limit": 8,
-                    }
+                    config=invoke_config
                 )
+                # Agent 执行完成后立即 flush，确保 async trace 上传
+                if lf_handler:
+                    try:
+                        lf_handler.flush()
+                    except Exception as flush_err:
+                        logger.warning(f"Langfuse flush 失败: {flush_err}")
 
                 # 解析返回的消息
                 await parse_messages(result['messages'])
@@ -457,7 +504,12 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
             # 关闭Redis连接
             await session_manager.close()
 
-    return asyncio.run(run_invoke())
+    result = asyncio.run(run_invoke())
+    # 确保 Langfuse trace 上传（async 短生命周期需要手动 flush）
+    _lf = get_langfuse_client()
+    if _lf:
+        _lf.flush()
+    return result
 
 
 # 定义Celery任务：异步运行智能体
@@ -508,13 +560,23 @@ def resume_agent_task(user_id: str, session_id: str, task_id: str, command_data:
                 )
 
                 # 调用智能体（recursion_limit 防止无限循环）
+                lf_handler = get_langfuse_handler()
+                invoke_config = {
+                    "configurable": {"thread_id": session_id},
+                    "recursion_limit": 8,
+                }
+                if lf_handler:
+                    invoke_config["callbacks"] = [lf_handler]
                 result = await agent.ainvoke(
                     Command(resume=command_data),
-                    config={
-                        "configurable": {"thread_id": session_id},
-                        "recursion_limit": 8,
-                    }
+                    config=invoke_config
                 )
+                # Agent 执行完成后立即 flush，确保 async trace 上传
+                if lf_handler:
+                    try:
+                        lf_handler.flush()
+                    except Exception as flush_err:
+                        logger.warning(f"Langfuse flush 失败: {flush_err}")
 
                 # 解析返回的消息
                 await parse_messages(result['messages'])
@@ -568,7 +630,12 @@ def resume_agent_task(user_id: str, session_id: str, task_id: str, command_data:
             # 关闭Redis连接
             await session_manager.close()
 
-    return asyncio.run(resume_invoke())
+    result = asyncio.run(resume_invoke())
+    # 确保 Langfuse trace 上传（async 短生命周期需要手动 flush）
+    _lf = get_langfuse_client()
+    if _lf:
+        _lf.flush()
+    return result
 
 
 

@@ -23,26 +23,45 @@ def split_text(text: str, source_name: str) -> list[dict]:
     current_chunk = ""
     chunk_idx = 0
 
+    # 超长段落：按句子边界进一步切分（text-embedding-v1 输入上限 2048 token，500 中文字符≈1000 token，安全）
+    def split_long_para(para: str) -> list[str]:
+        if len(para) <= CHUNK_SIZE:
+            return [para]
+        parts = re.split(r'(?<=[。！？；])', para)  # 在句末标点后切
+        result, buf = [], ""
+        for s in parts:
+            if len(buf) + len(s) <= CHUNK_SIZE:
+                buf += s
+            else:
+                if buf.strip():
+                    result.append(buf)
+                buf = s
+        if buf.strip():
+            result.append(buf)
+        return result
+
     for para in paragraphs:
         para = para.strip()
         if not para:
             continue
 
-        # 如果当前 chunk + 新段落不超过限制，追加
-        if len(current_chunk) + len(para) <= CHUNK_SIZE:
-            current_chunk += para + "\n"
-        else:
-            # 当前 chunk 先存
-            if len(current_chunk.strip()) >= 50:  # 过滤太短的碎片
-                chunks.append({
-                    "content": current_chunk.strip(),
-                    "source": source_name,
-                    "chunk_id": chunk_idx,
-                })
-                chunk_idx += 1
+        sub_paras = split_long_para(para)
+        for sub in sub_paras:
+            # 如果当前 chunk + 新段落不超过限制，追加
+            if len(current_chunk) + len(sub) <= CHUNK_SIZE:
+                current_chunk += sub + "\n"
+            else:
+                # 当前 chunk 先存
+                if len(current_chunk.strip()) >= 50:  # 过滤太短的碎片
+                    chunks.append({
+                        "content": current_chunk.strip(),
+                        "source": source_name,
+                        "chunk_id": chunk_idx,
+                    })
+                    chunk_idx += 1
 
-            # 新段落开始新 chunk，带 overlap
-            current_chunk = current_chunk[-CHUNK_OVERLAP:] + para + "\n" if len(current_chunk) >= CHUNK_OVERLAP else para + "\n"
+                # 新段落开始新 chunk，带 overlap
+                current_chunk = current_chunk[-CHUNK_OVERLAP:] + sub + "\n" if len(current_chunk) >= CHUNK_OVERLAP else sub + "\n"
 
     # 最后一个 chunk
     if len(current_chunk.strip()) >= 50:
@@ -75,19 +94,22 @@ def read_file_content(fpath: Path) -> str:
 
 
 def build_index(documents_dir: str = None):
-    """离线建库：读取 documents/ 下所有 txt 和 pdf，切分 → Embedding → Chroma"""
+    """离线建库：读取 documents/ + docs/ 下所有 txt 和 pdf，切分 → Embedding → Chroma"""
     if documents_dir is None:
         documents_dir = os.path.join(os.path.dirname(__file__), "documents")
 
     retriever = RAGRetriever()
     doc_path = Path(documents_dir)
 
-    if not doc_path.exists():
-        print(f"[RAG] 文档目录不存在: {documents_dir}")
-        return
-
-    # 支持 txt 和 pdf（Windows glob 不区分大小写，写小写即可）
-    doc_files = list(doc_path.glob("*.txt")) + list(doc_path.glob("*.pdf"))
+    # 同时扫描 docs/ 目录（项目自带示例文档），跳过课程遗留 PDF
+    project_docs = Path(os.path.join(os.path.dirname(__file__), "..", "..", "docs"))
+    doc_files = []
+    for scan_dir in [doc_path, project_docs]:
+        if scan_dir.exists():
+            for f in list(scan_dir.glob("*.txt")) + list(scan_dir.glob("*.pdf")):
+                if re.match(r'^\d{2}_.*\.(pdf|PDF)$', f.name):  # 排除 01_/02_/03_ 课程文档
+                    continue
+                doc_files.append(f)
     if not doc_files:
         print(f"[RAG] 没有找到文档文件: {documents_dir}")
         return
