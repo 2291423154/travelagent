@@ -1,0 +1,102 @@
+name: Agent Eval
+
+# 只支持手动触发，不自动跑（避免消耗 API 额度）
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'LLM 模型'
+        required: false
+        default: 'deepseek-v4-flash'
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # 如果没有配 Secrets，直接跳过
+    if: ${{ secrets.OPENAI_API_KEY != '' }}
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent123
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build RAG index
+        run: python -m utils.rag.build_index
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+
+      - name: Start services
+        run: |
+          celery -A utils.tasks worker --pool=solo --loglevel=warning &
+          sleep 3
+          python server.py &
+          sleep 5
+          curl -s http://localhost:8001/docs > /dev/null && echo "Server ready"
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_CHAT_MODEL: ${{ github.event.inputs.model }}
+          DB_URI: postgresql://agent:agent123@localhost:5432/postgres?sslmode=disable
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          AMAP_MAPS_API_KEY: ${{ secrets.AMAP_MAPS_API_KEY }}
+
+      - name: Run evaluation
+        id: eval
+        run: python -m tests.eval_ci --json-only
+        env:
+          BASE_URL: http://localhost:8001
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_CHAT_MODEL: ${{ github.event.inputs.model }}
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: tests/eval_ci_result.json
+
+      - name: Report success
+        if: success()
+        run: echo "✅ 20 条评估全部通过"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "❌ 评估未全部通过！"
+          echo "下载 Artifact eval-report 查看 tests/eval_ci_result.json 详情"

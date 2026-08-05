@@ -40,15 +40,15 @@ logger.addHandler(handler)
 # 模型配置字典
 MODEL_CONFIGS = {
     "openai": {
-        "base_url": os.getenv("OPENAI_BASE_URL", "https://api.llm.ustc.edu.cn/v1"),
+        "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         "api_key": os.getenv("OPENAI_API_KEY"),
         "chat_model": os.getenv("OPENAI_CHAT_MODEL", "deepseek-v4-pro"),
         "embedding_model": os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-v1")
     },
     "oneapi": {
-        "base_url": "http://139.224.72.218:3000/v1",
-        "api_key": "sk-GseYmJ8pX1D0I200W7a5062e8f12122342323C4B724FfD66aD9",
-        "chat_model": "qwen-max",
+        "base_url": os.getenv("ONEAPI_BASE_URL", "http://localhost:3000/v1"),
+        "api_key": os.getenv("ONEAPI_API_KEY"),
+        "chat_model": os.getenv("ONEAPI_CHAT_MODEL", "qwen-max"),
         "embedding_model": "text-embedding-v1"
     },
     "qwen": {

@@ -22,6 +22,7 @@ from .llms import get_llm
 from .tools import get_tools
 from .models import AgentResponse
 from .redis import RedisSessionManager, get_session_manager
+from .workflow import classify_query, get_recursion_limit
 from langgraph.types import interrupt, Command
 
 # ---- Langfuse 可观测性（懒加载，未安装或未配置则跳过）----
@@ -407,6 +408,12 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                 # 获取工具列表
                 tools = await get_tools()
 
+                # Workflow 层：分类查询，混合查询提高 recursion_limit（8→10）
+                # 混合查询需同时调 RAG + MCP，实测 6+ 步，limit=8 偏紧
+                query_type = await classify_query(query, llm_chat)
+                dynamic_limit = get_recursion_limit(query_type)
+                logger.info(f"查询分类: {query_type} | recursion_limit={dynamic_limit} | {query[:50]}...")
+
                 # 创建ReAct智能体
                 agent = create_react_agent(
                     model=llm_chat,
@@ -416,16 +423,14 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                     store=store
                 )
 
-                # 获取长期记忆
+                # 获取长期记忆并拼接到系统提示词
                 system_message = system_prompt
                 result = await read_long_term_info(user_id, store)
-                # 检查返回结果是否成功
                 if result.get("success", False):
                     long_term_info = result.get("long_term_info")
-                    # 若获取到的内容不为空，拼接到系统提示词
                     if long_term_info:
-                        system_message = f"{system_prompt}我的附加信息有:{long_term_info}"
-                        logger.info(f"获取用户长期记忆，system_message的信息为:{system_message}")
+                        system_message = f"{system_message}我的附加信息有:{long_term_info}"
+                        logger.info(f"已拼接长期记忆")
 
                 # 构造智能体输入消息体
                 messages = [
@@ -433,11 +438,11 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                     {"role": "user", "content": query}
                 ]
 
-                # 调用智能体（recursion_limit 防止无限循环，每轮 resume 累积计数由 Redis 控制）
+                # 调用智能体（recursion_limit 根据查询类型动态调整：混合=10，其他=8）
                 lf_handler = get_langfuse_handler()
                 invoke_config = {
                     "configurable": {"thread_id": session_id},
-                    "recursion_limit": 8,
+                    "recursion_limit": dynamic_limit,
                 }
                 if lf_handler:
                     invoke_config["callbacks"] = [lf_handler]
@@ -445,7 +450,6 @@ def invoke_agent_task(user_id: str, session_id: str, task_id: str, query: str, s
                     {"messages": messages},
                     config=invoke_config
                 )
-                # Agent 执行完成后立即 flush，确保 async trace 上传
                 if lf_handler:
                     try:
                         lf_handler.flush()
@@ -559,11 +563,11 @@ def resume_agent_task(user_id: str, session_id: str, task_id: str, command_data:
                     store=store
                 )
 
-                # 调用智能体（recursion_limit 防止无限循环）
+                # 调用智能体（resume 保持与原 invoke 相同的 recursion_limit）
                 lf_handler = get_langfuse_handler()
                 invoke_config = {
                     "configurable": {"thread_id": session_id},
-                    "recursion_limit": 8,
+                    "recursion_limit": 10,
                 }
                 if lf_handler:
                     invoke_config["callbacks"] = [lf_handler]

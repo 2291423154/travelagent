@@ -187,7 +187,7 @@ async def invoke_agent(request: AgentRequest):
         session_id=session_id,
         task_id=task_id,
         query=request.query,
-        system_prompt=request.system_message or "你是一个高效助手。你可以使用工具获取信息，但必须：1)最多调3次工具就必须给出最终回答 2)工具结果够了就立即停止 3)不需要工具时直接回复 4)用中文简洁回复"
+        system_prompt=request.system_message or "你是高效助手。工具使用规则：1）推荐类问题：先查知识库(search_travel_knowledge)确认信息，再最多用1个MCP工具补充实时数据 2）交通类问题：只给出1条最优路线，不要逐家逐店对比 3）调满5次工具后必须停止并综合已有信息回答 4）不需要工具时直接回复 5）用中文简洁回复"
     )
 
     # 设置任务状态为等待并绑定用户和会话

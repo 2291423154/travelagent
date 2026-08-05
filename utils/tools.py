@@ -76,7 +76,7 @@ async def add_human_in_the_loop(
         response = interrupt(request)
         logger.info(f"response: {response}")
 
-        # 检查响应类型是否为“接受”（accept）
+        # 检查响应类型是否为"接受"（accept）
         if response["type"] == "accept":
             logger.info("工具调用已批准，执行中...")
             logger.info(f"调用工具: {tool.name}, 参数: {tool_input}")
@@ -87,7 +87,7 @@ async def add_human_in_the_loop(
             except Exception as e:
                 logger.error(f"工具调用失败: {e}")
 
-        # 检查响应类型是否为“编辑”（edit）
+        # 检查响应类型是否为"编辑"（edit）
         elif response["type"] == "edit":
             # 如果是编辑，更新工具输入参数为响应中提供的参数
             tool_input = response["args"]["args"]
@@ -98,13 +98,13 @@ async def add_human_in_the_loop(
             except Exception as e:
                 logger.error(f"工具调用失败: {e}")
 
-        # 检查响应类型是否为“拒绝”（reject）
+        # 检查响应类型是否为"拒绝"（reject）
         elif response["type"] == "reject":
             logger.info("工具调用被拒绝，等待用户输入...")
             # 直接将用户反馈作为工具的响应
             tool_response = '该工具被拒绝使用，请尝试其他方法或拒绝回答问题。'
 
-        # 检查响应类型是否为“响应”（response）
+        # 检查响应类型是否为"响应"（response）
         elif response["type"] == "response":
             # 如果是响应，直接将用户反馈作为工具的响应
             user_feedback = response["args"]
@@ -120,35 +120,64 @@ async def add_human_in_the_loop(
 
 # 获取工具列表 提供给第三方调用
 async def get_tools():
-    # 自定义工具 模拟酒店预定工具
-    @tool("book_hotel", description="酒店预定工具")
-    async def book_hotel(hotel_name: str):
-        """
-       支持酒店预定的工具
+    import uuid
+    from datetime import datetime
 
-        Args:
-            hotel_name: 酒店名称
+    # 酒店搜索工具（Amadeus 真实 API）
+    @tool("search_hotels", description="搜索真实酒店信息（价格、评分、空房）。输入城市名（中文）或城市代码（如'北京'或'PEK'），可选入住/离店日期。返回真实酒店列表含名称、评分、价格和可预订状态。")
+    async def search_hotels(
+        city: str,
+        check_in: str = "",
+        check_out: str = "",
+    ):
+        """通过 Amadeus API 搜索真实酒店数据"""
+        from utils.amadeus import get_amadeus, CITY_CODES
 
-        Returns:
-            工具的调用结果
-        """
-        return f"成功预定了在{hotel_name}的住宿。"
+        city_code = CITY_CODES.get(city.strip(), city.strip().upper())
+        client = get_amadeus()
+        results = client.search_hotels(
+            city_code=city_code,
+            check_in=check_in if check_in else None,
+            check_out=check_out if check_out else None,
+            adults=1,
+        )
+        return client.format_for_llm(results)
 
-    # 自定义工具 计算两个数的乘积的工具
-    @tool("multiply", description="计算两个数的乘积的工具")
-    async def multiply(a: float, b: float) -> float:
-        """
-       支持计算两个数的乘积的工具
+    # 酒店预定工具（参数校验 + 模拟订单号——搜索后确认预订）
+    @tool("book_hotel", description="确认预订指定酒店，需提供酒店名称、入住日期、离店日期和住客姓名。请先用 search_hotels 搜索可用酒店后再调用此工具预订。")
+    async def book_hotel(
+        hotel_name: str,
+        check_in: str,
+        check_out: str,
+        guest_name: str,
+    ):
+        """预定酒店，返回含订单号的确认信息"""
+        if not hotel_name.strip():
+            return "错误：酒店名称不能为空"
+        if not check_in or not check_out:
+            return "错误：入住日期和离店日期均需提供"
+        if check_in >= check_out:
+            return f"错误：入住日期({check_in})必须早于离店日期({check_out})"
+        if not guest_name.strip():
+            return "错误：住客姓名不能为空"
+        order_id = uuid.uuid4().hex[:10].upper()
+        return (
+            f"预定成功！\n"
+            f"订单号：HTL-{order_id}\n"
+            f"酒店：{hotel_name}\n"
+            f"住客：{guest_name}\n"
+            f"入住：{check_in}\n"
+            f"离店：{check_out}\n"
+            f"状态：已确认（模拟）"
+        )
 
-        Args:
-            a: 参数1
-            b: 参数2
-
-        Returns:
-            工具的调用结果
-        """
-        result = a * b
-        return f"{a}乘以{b}等于{result}。"
+    # 获取当前时间（无需 HITL，无安全风险）
+    @tool("get_current_time", description="获取当前日期和时间，用于安排行程、判断航班时间、确认时差等")
+    async def get_current_time() -> str:
+        """返回当前日期时间字符串"""
+        now = datetime.now()
+        weekday = ["一", "二", "三", "四", "五", "六", "日"][now.weekday()]
+        return f"当前时间：{now.strftime('%Y年%m月%d日 %H:%M:%S')}（星期{weekday}）"
 
     # MCP Server工具 高德地图
     client = MultiServerMCPClient({
@@ -170,16 +199,17 @@ async def get_tools():
     # RAG 知识库检索
     @tool("search_travel_knowledge", description="【首选工具】查旅游攻略、历史文化、美食推荐、景点背景、游玩路线、避坑指南、省钱技巧。当用户问'XX有什么好吃的/好玩的/值得去的/历史典故/注意事项/怎么省钱'时，必须优先使用此工具。不要用高德搜索代替——高德只返回POI坐标列表，没有深度攻略和人文内容。此工具和高德互补：此工具拿知识，高德拿实时数据。")
     async def search_travel_knowledge(query: str):
-        """检索离线知识库——包含详细旅游攻略、历史文化背景、美食推荐排名、游玩路线规划、省钱技巧。数据来自9本专业旅游攻略PDF。返回结构化文本。"""
+        """检索离线知识库——包含详细旅游攻略、历史文化背景、美食推荐排名、游玩路线规划、省钱技巧。返回结构化文本。"""
         from utils.rag.retriever import get_retriever
         retriever = get_retriever()
         result = retriever.format_for_llm(query, top_k=3)
         return result if result else "知识库暂无相关内容。"
 
     # 追加自定义工具并添加人工审查
+    tools.append(await add_human_in_the_loop(search_hotels))
     tools.append(await add_human_in_the_loop(book_hotel))
     tools.append(await add_human_in_the_loop(search_travel_knowledge))
-    tools.append(multiply)
+    tools.append(get_current_time)
 
     # 返回工具列表
     return tools

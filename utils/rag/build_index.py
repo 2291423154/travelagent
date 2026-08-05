@@ -83,11 +83,10 @@ def read_file_content(fpath: Path) -> str:
     elif suffix == ".pdf":
         try:
             from PyPDF2 import PdfReader
-            reader = PdfReader(str(fpath))
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
         except ImportError:
-            print(f"[RAG] 需要安装 PyPDF2: pip install PyPDF2（跳过 {fpath.name}）")
-            return ""
+            from pypdf import PdfReader
+        reader = PdfReader(str(fpath))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
     else:
         print(f"[RAG] 不支持的文件格式: {suffix}")
         return ""
@@ -106,9 +105,8 @@ def build_index(documents_dir: str = None):
     doc_files = []
     for scan_dir in [doc_path, project_docs]:
         if scan_dir.exists():
+            # txt + pdf 均支持，PDF 解析失败自动跳过
             for f in list(scan_dir.glob("*.txt")) + list(scan_dir.glob("*.pdf")):
-                if re.match(r'^\d{2}_.*\.(pdf|PDF)$', f.name):  # 排除 01_/02_/03_ 课程文档
-                    continue
                 doc_files.append(f)
     if not doc_files:
         print(f"[RAG] 没有找到文档文件: {documents_dir}")
@@ -119,7 +117,11 @@ def build_index(documents_dir: str = None):
     all_chunks = []
     for fpath in doc_files:
         print(f"[RAG]   处理: {fpath.name}")
-        text = read_file_content(fpath)
+        try:
+            text = read_file_content(fpath)
+        except Exception as e:
+            print(f"[RAG]     → 跳过（读取失败: {e}）")
+            continue
         if not text:
             continue
         chunks = split_text(text, fpath.name)
@@ -132,34 +134,17 @@ def build_index(documents_dir: str = None):
 
     print(f"[RAG] 总计 {len(all_chunks)} 个 chunk，开始 Embedding...")
 
-    # 清空旧数据
-    try:
-        retriever.client.delete_collection("travel_knowledge")
-        retriever.collection = retriever.client.get_or_create_collection(
-            name="travel_knowledge",
-            metadata={"hnsw:space": "cosine"},
-        )
-    except Exception:
-        pass
-
-    # 批量 Embedding + 入库
-    batch_size = 20
+    # 清空旧索引 + 批量 Embedding + 入库
+    retriever.clear()
+    batch_size = 10
     for i in range(0, len(all_chunks), batch_size):
         batch = all_chunks[i : i + batch_size]
         texts = [c["content"] for c in batch]
         embeddings = retriever.embed(texts)
-        ids = [f"chunk_{c['chunk_id']}" for c in batch]  # chunk_id 已包含文件名前缀，全局唯一
-        metadatas = [{"source": c["source"], "chunk_id": c["chunk_id"]} for c in batch]
-
-        retriever.collection.add(
-            embeddings=embeddings,
-            documents=texts,
-            metadatas=metadatas,
-            ids=ids,
-        )
+        retriever.add(batch, embeddings)
         print(f"[RAG]   已入库 {min(i + batch_size, len(all_chunks))}/{len(all_chunks)}")
 
-    print(f"[RAG] 建库完成！共 {retriever.doc_count} 条记录")
+    print(f"[RAG] 建库完成！共 {retriever.count()} 条记录")
 
 
 if __name__ == "__main__":

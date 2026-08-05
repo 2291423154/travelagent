@@ -21,6 +21,7 @@ env/
 
 # RAG data (large binary files)
 utils/rag/rag_db/
+!utils/rag/rag_db/index.json
 utils/rag/documents/
 
 # Logs
@@ -61,8 +62,9 @@ docker/**/data/
 celerybeat-schedule
 celerybeat.pid
 
-# PDF docs (binary)
+# PDF docs (binary) — 本地放 PDF 建索引，仅上传 index.json
 docs/*.pdf
+utils/rag/documents/*.pdf
 
 # Dev journal
 logfile/

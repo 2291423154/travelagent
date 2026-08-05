@@ -5,8 +5,8 @@ services:
     image: postgres:15        # 指定具体版本
     container_name: postgres_db
     environment:
-      POSTGRES_USER: kevin
-      POSTGRES_PASSWORD: 123456
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent123
       POSTGRES_DB: postgres
       TZ: Asia/Shanghai       # 设置时区
     ports:
@@ -15,7 +15,7 @@ services:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:             # 健康检查
-      test: ["CMD", "pg_isready", "-U", "kevin"]
+      test: ["CMD", "pg_isready", "-U", "agent"]
       interval: 10s
       timeout: 5s
       retries: 5
