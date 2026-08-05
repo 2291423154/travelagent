@@ -8,11 +8,16 @@ on:
         description: 'LLM 模型'
         required: false
         default: 'deepseek-v4-flash'
+      full:
+        description: '跑全量 20 条（默认 8 条精简集）'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     services:
       postgres:
@@ -64,7 +69,7 @@ jobs:
           python server.py &
           sleep 5
           curl -s http://localhost:8001/docs > /dev/null && echo "Server ready"
-          python -m tests.eval_ci --json-only
+          python -m tests.eval_ci --json-only ${{ github.event.inputs.full == 'true' && '--full' || '' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
