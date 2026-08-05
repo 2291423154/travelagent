@@ -189,8 +189,9 @@ async def get_tools():
         return f"当前时间：{now.strftime('%Y年%m月%d日 %H:%M:%S')}（星期{weekday}）"
 
     # MCP Server工具 高德地图
-    # 如果 MCP 不可用（依赖版本冲突），跳过 MCP 工具，只保留 RAG + Amadeus + 时间
+    # 如果 MCP 不可用（依赖版本冲突或网络不通），跳过 MCP 工具
     if _MCP_AVAILABLE:
+        import asyncio
         try:
             client = MultiServerMCPClient({
                 "amap-maps-streamableHTTP": {
@@ -198,11 +199,12 @@ async def get_tools():
                     "transport": "streamable_http"
                 }
             })
-            amap_tools = await client.get_tools()
+            # 超时保护：CI 环境可能连不上 MCP Server，不能让它无限等
+            amap_tools = await asyncio.wait_for(client.get_tools(), timeout=15)
             tools = [await add_human_in_the_loop(index) for index in amap_tools]
             logger.info(f"MCP 工具加载成功: {len(tools)} 个")
         except Exception as e:
-            logger.warning(f"MCP 工具加载失败: {e}，跳过 MCP 工具")
+            logger.warning(f"MCP 工具加载失败（{e}），跳过 MCP 工具，Agent 仅用 RAG + Amadeus")
             tools = []
     else:
         logger.warning(f"MCP 不可用: {_MCP_ERROR}，跳过 MCP 工具")
