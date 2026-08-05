@@ -8,7 +8,16 @@ from langgraph.prebuilt.interrupt import HumanInterruptConfig, HumanInterrupt
 from langgraph.types import interrupt, Command
 from langchain_core.tools import tool
 from .config import Config
-from langchain_mcp_adapters.client import MultiServerMCPClient
+
+# MCP 客户端懒加载——langchain-mcp-adapters 和 mcp 包的版本兼容性不稳定，
+# 导入失败时 MCP 工具不可用，但不影响 RAG / Amadeus / get_current_time 等其他工具
+_MCP_AVAILABLE = False
+_MCP_ERROR = None
+try:
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+    _MCP_AVAILABLE = True
+except ImportError as e:
+    _MCP_ERROR = str(e)
 
 
 # 设置日志基本配置，级别为DEBUG或INFO
@@ -180,21 +189,24 @@ async def get_tools():
         return f"当前时间：{now.strftime('%Y年%m月%d日 %H:%M:%S')}（星期{weekday}）"
 
     # MCP Server工具 高德地图
-    client = MultiServerMCPClient({
-        # 高德地图MCP Server
-        # "amap-amap-sse": {
-        #     "url": "https://mcp.amap.com/sse?key=" + os.getenv("AMAP_MAPS_API_KEY"),
-        #     "transport": "sse",
-        # },
-        "amap-maps-streamableHTTP": {
-            "url": "https://mcp.amap.com/mcp?key=" + os.getenv("AMAP_MAPS_API_KEY"),
-            "transport": "streamable_http"
-        }
-    })
-    # 从MCP Server中获取可提供使用的全部工具
-    amap_tools = await client.get_tools()
-    # 为工具添加人工审查
-    tools = [await add_human_in_the_loop(index) for index in amap_tools]
+    # 如果 MCP 不可用（依赖版本冲突），跳过 MCP 工具，只保留 RAG + Amadeus + 时间
+    if _MCP_AVAILABLE:
+        try:
+            client = MultiServerMCPClient({
+                "amap-maps-streamableHTTP": {
+                    "url": "https://mcp.amap.com/mcp?key=" + os.getenv("AMAP_MAPS_API_KEY"),
+                    "transport": "streamable_http"
+                }
+            })
+            amap_tools = await client.get_tools()
+            tools = [await add_human_in_the_loop(index) for index in amap_tools]
+            logger.info(f"MCP 工具加载成功: {len(tools)} 个")
+        except Exception as e:
+            logger.warning(f"MCP 工具加载失败: {e}，跳过 MCP 工具")
+            tools = []
+    else:
+        logger.warning(f"MCP 不可用: {_MCP_ERROR}，跳过 MCP 工具")
+        tools = []
 
     # RAG 知识库检索
     @tool("search_travel_knowledge", description="【首选工具】查旅游攻略、历史文化、美食推荐、景点背景、游玩路线、避坑指南、省钱技巧。当用户问'XX有什么好吃的/好玩的/值得去的/历史典故/注意事项/怎么省钱'时，必须优先使用此工具。不要用高德搜索代替——高德只返回POI坐标列表，没有深度攻略和人文内容。此工具和高德互补：此工具拿知识，高德拿实时数据。")
