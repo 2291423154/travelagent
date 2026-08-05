@@ -19,9 +19,8 @@ env/
 .vscode/
 *.swp
 
-# RAG data (large binary files)
+# RAG data (Chroma binary index)
 utils/rag/rag_db/
-!utils/rag/rag_db/index.json
 utils/rag/documents/
 
 # Logs

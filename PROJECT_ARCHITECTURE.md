@@ -63,7 +63,7 @@
 │  numpy，余弦相似度               │
 │  ┌───────────────────────────┐  │
 │  │ 旅游攻略知识库              │  │ ← 20 份文档，495 chunks
-│  │ (JSON + numpy 向量存储)     │  │    语义检索 + LLM 生成
+│  │ (Chroma HNSW 索引)          │  │    语义检索 + LLM 生成
 │  └───────────────────────────┘  │
 └─────────────────────────────────┘
 ```
@@ -75,7 +75,7 @@
 | 会话临时状态 | Redis | 毫秒级读写，TTL 自动清理，不用手动删过期数据 |
 | Agent 状态快照 | PostgreSQL | 需要事务保证和持久化——断电不丢 |
 | 用户偏好/习惯 | PostgreSQL | 结构化查询——"查这个用户的所有偏好"用 SQL 比 Redis Hash 方便 |
-| 知识库向量 | numpy 索引 | 余弦相似度检索，轻量零依赖，语义检索不是 Redis 的设计目标 |
+| 知识库向量 | Chroma | HNSW 索引 + 余弦相似度检索，语义检索不是 Redis 的设计目标 |
 
 ### 为什么用 PostgreSQL 而不是 SQLite？
 
@@ -104,7 +104,7 @@ docker-compose.yml
 
 ```
 离线阶段（建库，只跑一次）
-  文档加载 → 切分(500字+100字overlap) → Embedding → numpy 向量索引
+  文档加载 → 切分(500字+100字overlap) → Embedding → Chroma
          ↑
   支持格式: .txt（pypdf 可选支持 PDF）
   Embedding: text-embedding-v1（阿里百炼，1536维）
@@ -172,7 +172,7 @@ docker-compose.yml
 
 **问题**：混合 RAG+MCP 任务（v3 仅 1/5 通过）——复合 Query 需 6+ 步串行工具调用，易超 recursion_limit。典型链路：search_travel_knowledge → maps_text_search → maps_search_detail → maps_geo → maps_direction_transit → maps_direction_driving。
 
-**方案**：新增 Workflow 层——Agent 启动前用分类模型判断查询复杂度，混合查询动态提高 recursion_limit（8→10）并收紧工具体使用约束（限制推荐逐家对比、要求只给最优路线）。
+**方案**：新增查询分类预处理——Agent 启动前用分类模型判断查询复杂度，混合查询动态提高 recursion_limit（8→10）并收紧工具体使用约束（限制推荐逐家对比、要求只给最优路线）。
 
 **效果**：混合任务完成率从 1/5 提升至 4/5，总体评估提升至 95%。剩余 1 条（南京美食+交通）因 Agent 搜到餐厅后逐家查路线导致步数暴走，后续可进一步优化 System Prompt 约束。
 
