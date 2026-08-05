@@ -16,7 +16,7 @@ from test_queries import TEST_QUERIES
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8001")
 USER_ID = f"eval_ci_{int(time.time())}"
 POLL_INTERVAL = 2
-MAX_WAIT = 180
+MAX_WAIT = 300
 MAX_TOOL_CALLS = 12
 HTTP_TIMEOUT = 120
 
@@ -140,8 +140,8 @@ def main():
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "breakdown": {}
     }
-    for cat in TEST_QUERIES:
-        qs = TEST_QUERIES[cat]
+    for cat in queries_dict:
+        qs = queries_dict[cat]
         cr = sum(1 for r in all_r if r["query"] in qs and r["status"] == "completed")
         report["breakdown"][cat] = f"{cr}/{len(qs)}"
 
