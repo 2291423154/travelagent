@@ -11,6 +11,7 @@ celery>=5.3
 redis>=5.0
 psycopg[binary]>=3.1
 psycopg-pool>=3.1
+langgraph-checkpoint-postgres>=2.0
 python-dotenv>=1.0
 pypdf>=4.0
 pydantic>=2.0
