@@ -16,9 +16,29 @@ from test_queries import TEST_QUERIES
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8001")
 USER_ID = f"eval_ci_{int(time.time())}"
 POLL_INTERVAL = 2
-MAX_WAIT = 300
+MAX_WAIT = 180
 MAX_TOOL_CALLS = 12
 HTTP_TIMEOUT = 120
+
+# CI 精简测试集：每类取 2 条代表，共 8 条（全量 20 条耗时太长）
+CI_TEST_QUERIES = {
+    "纯RAG": [
+        "南京有什么特色小吃推荐？",
+        "冬天去哈尔滨应该准备什么？",
+    ],
+    "纯MCP": [
+        "帮我查一下南京新街口附近有什么商场",
+        "帮我查一下杭州西湖区现在的天气",
+    ],
+    "混合RAG+MCP": [
+        "推荐南京好吃的餐厅，并告诉我从南京站怎么过去",
+        "西安兵马俑值得去吗？从西安市区怎么过去？",
+    ],
+    "边缘Case": [
+        "火星上有什么好吃的餐厅？",
+        "这个周末有什么活动？（缺少具体城市）",
+    ],
+}
 
 
 def submit_query(query):
@@ -87,11 +107,13 @@ def run_one(query):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--json-only", action="store_true", help="只输出 JSON，不打印进度")
+    parser.add_argument("--full", action="store_true", help="跑全量 20 条（默认跑 8 条精简集）")
     args = parser.parse_args()
 
+    queries_dict = TEST_QUERIES if args.full else CI_TEST_QUERIES
     all_r = []
 
-    for cat, queries in TEST_QUERIES.items():
+    for cat, queries in queries_dict.items():
         if not args.json_only:
             print(f"\n── {cat} ──")
         for q in queries:
