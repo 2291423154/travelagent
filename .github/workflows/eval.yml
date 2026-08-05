@@ -14,9 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
-    # 如果没有配 Secrets，直接跳过
-    if: ${{ secrets.OPENAI_API_KEY != '' }}
-
     services:
       postgres:
         image: postgres:15
