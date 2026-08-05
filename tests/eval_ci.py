@@ -9,7 +9,6 @@
 """
 import time, json, sys, os, argparse
 import requests
-import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_queries import TEST_QUERIES
 
@@ -53,21 +52,27 @@ def submit_query(query):
 
 
 def get_status(sid, tid):
-    resp = requests.get(
-        f"{BASE_URL}/agent/status/{USER_ID}/{sid}/{tid}",
-        timeout=HTTP_TIMEOUT
-    )
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/agent/status/{USER_ID}/{sid}/{tid}",
+            timeout=HTTP_TIMEOUT
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return {"status": "?"}
 
 
 def resume(sid, tid):
-    resp = requests.post(f"{BASE_URL}/agent/resume", json={
-        "user_id": USER_ID, "session_id": sid, "task_id": tid,
-        "response_type": "accept",
-    }, timeout=HTTP_TIMEOUT)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.post(f"{BASE_URL}/agent/resume", json={
+            "user_id": USER_ID, "session_id": sid, "task_id": tid,
+            "response_type": "accept",
+        }, timeout=HTTP_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return {"status": "resume_failed"}
 
 
 def run_one(query):
