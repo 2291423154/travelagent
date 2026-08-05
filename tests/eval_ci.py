@@ -9,6 +9,8 @@
 """
 import time, json, sys, os, argparse
 import requests
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_queries import TEST_QUERIES
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8001")
