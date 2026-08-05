@@ -12,7 +12,7 @@ on:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -57,13 +57,14 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
 
-      - name: Start services
+      - name: Start services + Run evaluation
         run: |
           celery -A utils.tasks worker --pool=solo --loglevel=warning &
           sleep 3
           python server.py &
           sleep 5
           curl -s http://localhost:8001/docs > /dev/null && echo "Server ready"
+          python -m tests.eval_ci --json-only
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -71,15 +72,7 @@ jobs:
           DB_URI: postgresql://agent:agent123@localhost:5432/postgres?sslmode=disable
           CELERY_BROKER_URL: redis://localhost:6379/0
           AMAP_MAPS_API_KEY: ${{ secrets.AMAP_MAPS_API_KEY }}
-
-      - name: Run evaluation
-        id: eval
-        run: python -m tests.eval_ci --json-only
-        env:
           BASE_URL: http://localhost:8001
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          OPENAI_CHAT_MODEL: ${{ github.event.inputs.model }}
 
       - name: Upload eval report
         if: always()
@@ -88,12 +81,9 @@ jobs:
           name: eval-report
           path: tests/eval_ci_result.json
 
-      - name: Report success
-        if: success()
-        run: echo "✅ 20 条评估全部通过"
-
-      - name: Report failure
-        if: failure()
+      - name: Report
+        if: always()
         run: |
-          echo "❌ 评估未全部通过！"
-          echo "下载 Artifact eval-report 查看 tests/eval_ci_result.json 详情"
+          if [ -f tests/eval_ci_result.json ]; then
+            cat tests/eval_ci_result.json | python -c "import sys,json; d=json.load(sys.stdin); print(f'{d[\"passed\"]}/{d[\"total\"]} passed ({d[\"rate\"]})')"
+          fi
